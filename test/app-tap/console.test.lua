@@ -70,7 +70,6 @@ client:write(string.format("require('console').connect('/')\n"))
 -- error: Connection is not established
 test:ok(yaml.decode(client:read(EOL))[1].error:find('not established'),
     'remote network error')
-
 client:write(string.format("require('console').connect('%s')\n",
     IPROTO_SOCKET))
 -- error: Execute access is denied for user 'guest' to function 'dostring

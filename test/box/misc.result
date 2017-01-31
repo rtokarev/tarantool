@@ -182,14 +182,17 @@ end;
 t;
 ---
 - - DELETE
+  - COMMIT
   - SELECT
+  - ROLLBACK
   - INSERT
   - EVAL
   - CALL
+  - ERROR
   - REPLACE
   - UPSERT
   - AUTH
-  - ERROR
+  - BEGIN
   - UPDATE
   - total
   - rps

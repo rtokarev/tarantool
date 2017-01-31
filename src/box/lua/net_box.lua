@@ -56,7 +56,10 @@ local method_codec           = {
     delete  = internal.encode_delete,
     update  = internal.encode_update,
     upsert  = internal.encode_upsert,
-    select  = function(buf, id, schema_id, spaceno, indexno, key, opts)
+    begin   = internal.encode_begin,
+    commit  = internal.encode_commit,
+    rollback = internal.encode_rollback,
+    select  = function(buf, id, schema_id, tx_id, spaceno, indexno, key, opts)
         if type(spaceno) ~= 'number' then
             box.error(box.error.NO_SUCH_SPACE, '#'..tostring(spaceno))
         end
@@ -70,7 +73,7 @@ local method_codec           = {
 
         local key_is_nil = (key == nil or
                             (type(key) == 'table' and #key == 0))
-        encode_select(buf, id, schema_id, spaceno, indexno,
+        encode_select(buf, id, schema_id, tx_id, spaceno, indexno,
                       check_iterator_type(opts, key_is_nil),
                       offset, limit, key)
     end,
@@ -419,9 +422,11 @@ local function create_transport(host, port, user, password, callback)
         local select2_id = new_request_id()
         local response = {}
         -- fetch everything from space _vspace, 2 = ITER_ALL
-        encode_select(send_buf, select1_id, nil, VSPACE_ID, 0, 2, 0, 0xFFFFFFFF, nil)
+        encode_select(send_buf, select1_id, nil, fiber_self().id(), VSPACE_ID,
+                      0, 2, 0, 0xFFFFFFFF, nil)
         -- fetch everything from space _vindex, 2 = ITER_ALL
-        encode_select(send_buf, select2_id, nil, VINDEX_ID, 0, 2, 0, 0xFFFFFFFF, nil)
+        encode_select(send_buf, select2_id, nil, fiber_self().id(), VINDEX_ID,
+                      0, 2, 0, 0xFFFFFFFF, nil)
         schema_id = nil -- any schema_id will do provided that
                         -- it is consistent across responses
         repeat
@@ -654,14 +659,19 @@ function remote_methods:_request(method, ...)
     local deadlines = self._deadlines
     local deadline = deadlines[this_fiber]
     local err, res
+    local tx_id = this_fiber.id()
     repeat
         local timeout = deadline and max(0, deadline - fiber_time())
         if self.state ~= 'active' then
             wait_state('active', timeout)
             timeout = deadline and max(0, deadline - fiber_time())
         end
-        err, res = perform_request(timeout, method,
-                                   self._schema_id, ...)
+        if method ~= 'begin' and method ~= 'commit' and method ~= 'rollback' then
+            err, res = perform_request(timeout, method, self._schema_id,
+                                       tx_id, ...)
+        else
+            err, res = perform_request(timeout, method, self._schema_id, tx_id)
+        end
         if not err then
             setmetatable(res, sequence_mt)
             local postproc = method ~= 'eval' and method ~= 'call_17'
@@ -706,6 +716,21 @@ end
 function remote_methods:eval(code, ...)
     remote_check(self, 'eval')
     return unpack(self:_request('eval', code, {...}))
+end
+
+function remote_methods:begin(tx_id, ...)
+    remote_check(self, 'begin')
+    return unpack(self:_request('begin', tx_id, {...}))
+end
+
+function remote_methods:commit(tx_id, ...)
+    remote_check(self, 'commit')
+    return unpack(self:_request('commit', tx_id, {...}))
+end
+
+function remote_methods:rollback(tx_id, ...)
+    remote_check(self, 'rollback')
+    return unpack(self:_request('rollback', tx_id, {...}))
 end
 
 function remote_methods:wait_state(state, timeout)
@@ -825,7 +850,7 @@ function console_methods:eval(line, timeout)
     end
     if self.protocol == 'Binary' then
         local loader = 'return require("console").eval(...)'
-        err, res = pr(timeout, 'eval', nil, loader, {line})
+        err, res = pr(timeout, 'eval', nil, fiber_self().id(), loader, {line})
     else
         assert(self.protocol == 'Lua console')
         err, res = pr(timeout, 'inject', nil, line..'$EOF$\n')

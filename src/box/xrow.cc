@@ -41,7 +41,7 @@
 #include "scramble.h"
 #include "iproto_constants.h"
 
-enum { HEADER_LEN_MAX = 40, BODY_LEN_MAX = 128 };
+enum { HEADER_LEN_MAX = 50, BODY_LEN_MAX = 128 };
 
 /**
  * Globally unique identifier of this instance.
@@ -89,6 +89,9 @@ error:
 			break;
 		case IPROTO_SCHEMA_ID:
 			header->schema_id = mp_decode_uint(pos);
+			break;
+		case IPROTO_TRANSACTION_ID:
+			header->tx_id = mp_decode_uint(pos);
 			break;
 		default:
 			/* unknown header */
@@ -172,6 +175,13 @@ xrow_header_encode(const struct xrow_header *header, struct iovec *out,
 		d = mp_encode_double(d, header->tm);
 		map_size++;
 	}
+
+	if (true) {
+		d = mp_encode_uint(d, IPROTO_TRANSACTION_ID);
+		d = mp_encode_uint(d, header->tx_id);
+		map_size++;
+	}
+
 	assert(d <= data + HEADER_LEN_MAX);
 	mp_encode_map(data, map_size);
 	out->iov_len = d - (char *) out->iov_base;
@@ -200,7 +210,7 @@ request_decode(struct request *request, const char *data, uint32_t len)
 {
 	const char *end = data + len;
 	/** Advanced requests don't have a defined key map. */
-	assert(request->type <= IPROTO_CALL);
+	assert(request->type < IPROTO_TYPE_STAT_MAX);
 	uint64_t key_map = iproto_body_key_map[request->type];
 
 	if (mp_typeof(*data) != MP_MAP || mp_check_map(data, end) > 0) {
