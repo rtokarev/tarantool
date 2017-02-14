@@ -119,7 +119,7 @@ tuple_next(struct tuple_iterator *it)
 
 char *
 tuple_extract_key(const struct tuple *tuple, const struct key_def *key_def,
-		  uint32_t *key_size)
+		  uint32_t *key_size, struct region *region)
 {
 	const char *data = tuple_data(tuple);
 	uint32_t part_count = key_def->part_count;
@@ -137,7 +137,7 @@ tuple_extract_key(const struct tuple *tuple, const struct key_def *key_def,
 		bsize += end - field;
 	}
 
-	char *key = (char *) region_alloc(&fiber()->gc, bsize);
+	char *key = (char *) region_alloc(region, bsize);
 	if (key == NULL) {
 		diag_set(OutOfMemory, bsize, "region", "tuple_extract_key");
 		return NULL;
@@ -160,10 +160,11 @@ tuple_extract_key(const struct tuple *tuple, const struct key_def *key_def,
 
 char *
 tuple_extract_key_raw(const char *data, const char *data_end,
-		      const struct key_def *key_def, uint32_t *key_size)
+		      const struct key_def *key_def, uint32_t *key_size,
+		      struct region *region)
 {
 	/* allocate buffer with maximal possible size */
-	char *key = (char *) region_alloc(&fiber()->gc, data_end - data);
+	char *key = (char *) region_alloc(region, data_end - data);
 	if (key == NULL) {
 		diag_set(OutOfMemory, data_end - data, "region",
 			 "tuple_extract_key_raw");

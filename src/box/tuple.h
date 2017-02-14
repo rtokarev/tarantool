@@ -315,6 +315,8 @@ tuple_data_range(const struct tuple *tuple, uint32_t *p_size)
 	return (const char *) tuple + tuple->data_offset;
 }
 
+struct region;
+
 /**
  * Extract key from tuple by given key definition and return
  * buffer allocated on box_txn_alloc with this key. This function
@@ -322,13 +324,14 @@ tuple_data_range(const struct tuple *tuple, uint32_t *p_size)
  * @param tuple - tuple from which need to extract key
  * @param key_def - definition of key that need to extract
  * @param key_size - here will be size of extracted key
+ * @param region     The region to allocate the key.
  *
  * @retval not NULL Success
  * @retval NULL     Memory allocation error
  */
 char *
 tuple_extract_key(const struct tuple *tuple, const struct key_def *key_def,
-		  uint32_t *key_size);
+		  uint32_t *key_size, struct region *region);
 
 /**
  * Extract key from raw msgpuck by given key definition and return
@@ -338,13 +341,15 @@ tuple_extract_key(const struct tuple *tuple, const struct key_def *key_def,
  * @param data_end - pointer at the end of data
  * @param key_def - definition of key that need to extract
  * @param key_size - here will be size of extracted key
+ * @param region     The region to allocate the key.
  *
  * @retval not NULL Success
  * @retval NULL     Memory allocation error
  */
 char *
 tuple_extract_key_raw(const char *data, const char *data_end,
-		      const struct key_def *key_def, uint32_t *key_size);
+		      const struct key_def *key_def, uint32_t *key_size,
+		      struct region *region);
 
 /**
  * Get the format of the tuple.

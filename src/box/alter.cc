@@ -701,7 +701,7 @@ static struct trigger *
 txn_alter_trigger_new(trigger_f run, void *data)
 {
 	struct trigger *trigger = (struct trigger *)
-		region_calloc_object_xc(&fiber()->gc, struct trigger);
+		region_calloc_object_xc(txn_region(), struct trigger);
 	trigger->run = run;
 	trigger->data = data;
 	trigger->destroy = NULL;

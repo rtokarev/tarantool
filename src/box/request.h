@@ -37,18 +37,20 @@ extern "C" {
 #endif /* defined(__cplusplus) */
 
 struct request;
+struct region;
 
 /**
  * Convert one-based upsert/update operations to zero-based
  *
  * @param request a request to convert
+ * @param region  The allocator for the new ops array.
  * @pre request->type == IPROTO_UPDATE || request->type == IPROTO_UPSERT
  * @pre request->index_base != 0
  * @pre request->ops are valid (see tuple_update_check_ops())
  * @post request->index_base = 0
  */
 int
-request_normalize_ops(struct request *request);
+request_normalize_ops(struct request *request, struct region *region);
 
 #if defined(__cplusplus)
 } /* extern "C" */

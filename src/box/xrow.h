@@ -144,15 +144,19 @@ request_create(struct request *request, uint32_t code);
 int
 request_decode(struct request *request, const char *data, uint32_t len);
 
+struct region;
+
 /**
  * Encode the request fields to iovec using region_alloc().
  * @param request request to encode
  * @param iov[out] iovec to fill
+ * @param allocator for request body
  * @retval -1 on error, see diag
  * @retval > 0 the number of iovecs used
  */
 int
-request_encode(struct request *request, struct iovec *iov);
+request_encode(struct request *request, struct iovec *iov,
+	       struct region *region);
 
 enum {
 	/* Maximal length of protocol name in handshake */
@@ -254,9 +258,10 @@ request_decode_xc(struct request *request, const char *data, uint32_t len)
 }
 
 static inline int
-request_encode_xc(struct request *request, struct iovec *iov)
+request_encode_xc(struct request *request, struct iovec *iov,
+		  struct region *region)
 {
-	int iovcnt = request_encode(request, iov);
+	int iovcnt = request_encode(request, iov, region);
 	if (iovcnt < 0)
 		diag_raise();
 	return iovcnt;

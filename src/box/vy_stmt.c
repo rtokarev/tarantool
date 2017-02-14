@@ -459,7 +459,8 @@ vy_stmt_encode(const struct tuple *value, const struct key_def *key_def,
 	uint32_t size;
 	const char *extracted = NULL;
 	if (key_def->iid != 0 || type == IPROTO_DELETE) {
-		extracted = tuple_extract_key(value, key_def, &size);
+		extracted = tuple_extract_key(value, key_def, &size,
+					      &fiber()->gc);
 		if (extracted == NULL)
 			return -1;
 	}
@@ -481,7 +482,8 @@ vy_stmt_encode(const struct tuple *value, const struct key_def *key_def,
 			request.key = extracted;
 			request.key_end = request.key + size;
 		}
-		xrow->bodycnt = request_encode(&request, xrow->body);
+		xrow->bodycnt = request_encode(&request, xrow->body,
+					       &fiber()->gc);
 	} else {
 		if (type == IPROTO_REPLACE) {
 			request.tuple = extracted;
@@ -491,7 +493,8 @@ vy_stmt_encode(const struct tuple *value, const struct key_def *key_def,
 			request.key = extracted;
 			request.key_end = extracted + size;
 		}
-		xrow->bodycnt = request_encode(&request, xrow->body);
+		xrow->bodycnt = request_encode(&request, xrow->body,
+					       &fiber()->gc);
 	}
 	if (xrow->bodycnt < 0)
 		return -1;

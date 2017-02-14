@@ -36,14 +36,14 @@
 struct rmean *rmean_box;
 
 int
-request_normalize_ops(struct request *request)
+request_normalize_ops(struct request *request, struct region *region)
 {
 	assert(request->type == IPROTO_UPSERT ||
 	       request->type == IPROTO_UPDATE);
 	assert(request->index_base != 0);
 	char *ops;
 	ssize_t ops_len = request->ops_end - request->ops;
-	ops = (char *)region_alloc(&fiber()->gc, ops_len);
+	ops = (char *)region_alloc(region, ops_len);
 	if (ops == NULL)
 		return -1;
 	char *ops_end = ops;

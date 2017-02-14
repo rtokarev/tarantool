@@ -47,7 +47,7 @@ extern struct rlist engines;
 struct Handler;
 
 /** Engine instance */
-class Engine {
+struct Engine {
 public:
 	Engine(const char *engine_name, struct tuple_format_vtab *format);
 
