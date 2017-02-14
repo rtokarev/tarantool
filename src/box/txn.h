@@ -251,6 +251,9 @@ txn_last_stmt(struct txn *txn)
 	return stailq_last_entry(&txn->stmts, struct txn_stmt, next);
 }
 
+void
+txn_init();
+
 #endif /* defined(__cplusplus) */
 
 /**

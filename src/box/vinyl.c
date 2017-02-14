@@ -6222,20 +6222,21 @@ vy_replace_one(struct vy_tx *tx, struct space *space,
 		const char *key;
 		key = tuple_extract_key(new_tuple, def, NULL, txn_region());
 		if (key == NULL)                /* out of memory */
-			return -1;
+			goto error;
 		uint32_t part_count = mp_decode_array(&key);
 		if (vy_get(tx, pk, key, part_count, &stmt->old_tuple))
-			return -1;
+			goto error;
 	}
-	if (vy_tx_set(tx, pk, new_tuple)) {
-		tuple_unref(new_tuple);
-		return -1;
-	}
+	if (vy_tx_set(tx, pk, new_tuple) != 0)
+		goto error;
 	if (stmt != NULL)
 		stmt->new_tuple = new_tuple;
 	else
 		tuple_unref(new_tuple);
 	return 0;
+error:
+	tuple_unref(new_tuple);
+	return -1;
 }
 
 /**
@@ -6277,7 +6278,7 @@ vy_replace_impl(struct vy_tx *tx, struct space *space, struct request *request,
 
 	/* Get full tuple from the primary index. */
 	if (vy_index_get(tx, pk, key, part_count, &old_stmt) != 0)
-		return -1;
+		goto error;
 	/*
 	 * Replace in the primary index without explicit deletion
 	 * of the old tuple.
