@@ -172,6 +172,14 @@ enum vy_stat_name {
 	VY_STAT_TX_WRITE,
 	VY_STAT_CURSOR,
 	VY_STAT_CURSOR_OPS,
+	/* How many upserts was optimized while tx set */
+	VY_STAT_UPSERT_OPTIMIZED_TX,
+	/* How many upserts was optimized while commit */
+	VY_STAT_UPSERT_OPTIMIZED_COMMIT,
+	/* How many upsert chains was optimized */
+	VY_STAT_UPSERT_CHAINS_OPTIMIZED,
+	/* How many upserts was applied (except write operations) */
+	VY_STAT_UPSERT_APPLIED,
 	VY_STAT_LAST,
 };
 
@@ -182,6 +190,10 @@ static const char *vy_stat_strings[] = {
 	"tx_write",
 	"cursor",
 	"cursor_ops",
+	"upsert_optimized_tx",
+	"upsert_optimized_commit",
+	"upsert_chains_optimized",
+	"upsert_applied"
 };
 
 struct vy_stat {
@@ -347,7 +359,7 @@ vy_stat_tx_write_rate(struct vy_stat *s)
 static struct tuple *
 vy_apply_upsert(const struct tuple *upsert, const struct tuple *object,
 		const struct key_def *key_def, struct tuple_format *format,
-		bool suppress_error);
+		bool suppress_error, struct vy_stat *stat);
 
 /**
  * Run metadata. A run is a written to a file as a single
@@ -3365,6 +3377,7 @@ vy_range_set_upsert(struct vy_range *range, struct tuple *stmt)
 	assert(vy_stmt_type(stmt) == IPROTO_UPSERT);
 
 	struct vy_index *index = range->index;
+	struct vy_stat *stat = index->env->stat;
 	struct key_def *key_def = index->key_def;
 	struct vy_mem *mem = range->mem;
 	const struct tuple *older;
@@ -3386,7 +3399,7 @@ vy_range_set_upsert(struct vy_range *range, struct tuple *stmt)
 		assert(older == NULL || vy_stmt_type(older) != IPROTO_UPSERT);
 		struct tuple *upserted =
 			vy_apply_upsert(stmt, older, key_def,
-					index->space->format, false);
+					index->space->format, false, stat);
 		if (upserted == NULL)
 			return -1; /* OOM */
 		int64_t upserted_lsn = vy_stmt_lsn(upserted);
@@ -3406,6 +3419,9 @@ vy_range_set_upsert(struct vy_range *range, struct tuple *stmt)
 		assert(vy_stmt_type(upserted) == IPROTO_REPLACE);
 		int rc = vy_range_set(range, upserted, upserted_lsn);
 		tuple_unref(upserted);
+		if (rc == 0)
+			rmean_collect(stat->rmean,
+				      VY_STAT_UPSERT_OPTIMIZED_COMMIT, 1);
 		return rc;
 	}
 
@@ -5532,7 +5548,7 @@ vy_upsert_try_to_squash(struct tuple_format *format, struct region *region,
 static struct tuple *
 vy_apply_upsert(const struct tuple *new_stmt, const struct tuple *old_stmt,
 		const struct key_def *key_def, struct tuple_format *format,
-		bool suppress_error)
+		bool suppress_error, struct vy_stat *stat)
 {
 	/*
 	 * old_stmt - previous (old) version of stmt
@@ -5542,6 +5558,9 @@ vy_apply_upsert(const struct tuple *new_stmt, const struct tuple *old_stmt,
 	assert(new_stmt != NULL);
 	assert(new_stmt != old_stmt);
 	assert(vy_stmt_type(new_stmt) == IPROTO_UPSERT);
+
+	if (stat != NULL)
+		rmean_collect(stat->rmean, VY_STAT_UPSERT_APPLIED, 1);
 
 	if (old_stmt == NULL || vy_stmt_type(old_stmt) == IPROTO_DELETE) {
 		/*
@@ -5669,6 +5688,7 @@ static int
 vy_tx_set(struct vy_tx *tx, struct vy_index *index, struct tuple *stmt)
 {
 	assert(vy_stmt_type(stmt) != 0);
+	struct vy_stat *stat = index->env->stat;
 	/**
 	 * A statement in write set must have and unique lsn
 	 * in order to differ it from cachable statements in mem and run.
@@ -5687,9 +5707,12 @@ vy_tx_set(struct vy_tx *tx, struct vy_index *index, struct tuple *stmt)
 			(void) old_type;
 
 			stmt = vy_apply_upsert(stmt, old->stmt, index->key_def,
-					       index->space->format, true);
+					       index->space->format, true,
+					       stat);
 			if (stmt == NULL)
 				return -1;
+			rmean_collect(index->env->stat->rmean,
+				      VY_STAT_UPSERT_OPTIMIZED_TX, 1);
 			assert(vy_stmt_type(stmt) != 0);
 		}
 		tuple_unref(old->stmt);
@@ -8881,7 +8904,8 @@ vy_merge_iterator_next_lsn(struct vy_merge_iterator *itr, struct tuple **ret)
  */
 static NODISCARD int
 vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
-				struct tuple **ret, bool suppress_error)
+				struct tuple **ret, bool suppress_error,
+				struct vy_stat *stat)
 {
 	*ret = NULL;
 	struct tuple *t = itr->curr_stmt;
@@ -8902,7 +8926,8 @@ vy_merge_iterator_squash_upsert(struct vy_merge_iterator *itr,
 		if (next == NULL)
 			break;
 		struct tuple *applied;
-		applied = vy_apply_upsert(t, next, def, format, suppress_error);
+		applied = vy_apply_upsert(t, next, def, format, suppress_error,
+					  stat);
 		tuple_unref(t);
 		if (applied == NULL)
 			return -1;
@@ -9206,7 +9231,7 @@ vy_write_iterator_next(struct vy_write_iterator *wi, struct tuple **ret)
 
 		/* Squash upserts */
 		assert(vy_stmt_type(stmt) == IPROTO_UPSERT);
-		if (vy_merge_iterator_squash_upsert(mi, &stmt, false)) {
+		if (vy_merge_iterator_squash_upsert(mi, &stmt, false, NULL)) {
 			tuple_unref(stmt);
 			return -1;
 		}
@@ -9214,7 +9239,8 @@ vy_write_iterator_next(struct vy_write_iterator *wi, struct tuple **ret)
 			/* Turn UPSERT to REPLACE. */
 			struct tuple *applied;
 			applied = vy_apply_upsert(stmt, NULL, def,
-						  wi->surrogate_format, false);
+						  wi->surrogate_format, false,
+						  NULL);
 			tuple_unref(stmt);
 			if (applied == NULL)
 				return -1;
@@ -9516,6 +9542,7 @@ vy_read_iterator_next(struct vy_read_iterator *itr, struct tuple **result)
 	struct tuple *t = NULL;
 	struct vy_merge_iterator *mi = &itr->merge_iterator;
 	struct key_def *def = itr->index->key_def;
+	struct vy_stat *stat = itr->index->env->stat;
 	int rc = 0;
 	while (true) {
 		if (vy_read_iterator_merge_next_key(itr, &t)) {
@@ -9535,7 +9562,7 @@ vy_read_iterator_next(struct vy_read_iterator *itr, struct tuple **result)
 			rc = 0; /* No more data. */
 			break;
 		}
-		rc = vy_merge_iterator_squash_upsert(mi, &t, true);
+		rc = vy_merge_iterator_squash_upsert(mi, &t, true, stat);
 		if (rc != 0) {
 			if (rc == -1)
 				goto clear;
@@ -9555,7 +9582,8 @@ vy_read_iterator_next(struct vy_read_iterator *itr, struct tuple **result)
 			if (vy_stmt_type(t) == IPROTO_UPSERT) {
 				struct tuple *applied;
 				applied = vy_apply_upsert(t, NULL, def,
-							  mi->format, true);
+							  mi->format, true,
+							  stat);
 				tuple_unref(t);
 				t = applied;
 				assert(vy_stmt_type(t) == IPROTO_REPLACE);
@@ -9697,6 +9725,7 @@ vy_squash_process(struct vy_squash *squash)
 {
 	struct vy_index *index = squash->index;
 	struct vy_env *env = index->env;
+	struct vy_stat *stat = env->stat;
 	struct tuple_format *format = index->space->format;
 	struct key_def *key_def = index->key_def;
 	/* Upserts enabled only in the primary index. */
@@ -9739,10 +9768,10 @@ vy_squash_process(struct vy_squash *squash)
 		if (vy_tuple_compare(result, mem_stmt, key_def) != 0)
 			break;
 		struct tuple *applied;
-		if (vy_stmt_type(mem_stmt) == IPROTO_UPSERT)
+		if (vy_stmt_type(mem_stmt) == IPROTO_UPSERT) {
 			applied = vy_apply_upsert(mem_stmt, result, key_def,
-						  format, true);
-		else
+						  format, true, stat);
+		} else
 			applied = vy_stmt_dup(mem_stmt, format);
 		tuple_unref(result);
 		if (applied == NULL)
@@ -9751,6 +9780,7 @@ vy_squash_process(struct vy_squash *squash)
 		vy_mem_tree_iterator_prev(&mem->tree, &mem_itr);
 	}
 
+	rmean_collect(stat->rmean, VY_STAT_UPSERT_CHAINS_OPTIMIZED, 1);
 	/*
 	 * Insert the resulting REPLACE statement to the mem
 	 * and adjust the quota.
