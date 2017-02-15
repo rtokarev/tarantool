@@ -666,12 +666,8 @@ function remote_methods:_request(method, ...)
             wait_state('active', timeout)
             timeout = deadline and max(0, deadline - fiber_time())
         end
-        if method ~= 'begin' and method ~= 'commit' and method ~= 'rollback' then
-            err, res = perform_request(timeout, method, self._schema_id,
-                                       tx_id, ...)
-        else
-            err, res = perform_request(timeout, method, self._schema_id, tx_id)
-        end
+        err, res = perform_request(timeout, method, self._schema_id,
+                                   tx_id, ...)
         if not err then
             setmetatable(res, sequence_mt)
             local postproc = method ~= 'eval' and method ~= 'call_17'
@@ -718,14 +714,30 @@ function remote_methods:eval(code, ...)
     return unpack(self:_request('eval', code, {...}))
 end
 
-function remote_methods:begin(tx_id, ...)
-    remote_check(self, 'begin')
-    return unpack(self:_request('begin', tx_id, {...}))
+function remote_methods:remote_tx_manage(method)
+    remote_check(self, method)
+    local deadline = self._deadlines[fiber_self()]
+    local timeout = deadline and max(0, deadline-fiber_time())
+    local tx_id = fiber_self().id()
+    local err, res = self._transport.perform_request(timeout, method,
+                                                     self._schema_id, tx_id)
+    if not err or err == E_WRONG_SCHEMA_VERSION then
+        return true
+    else
+        box.error({code = err, reason = res})
+    end
 end
 
-function remote_methods:commit(tx_id, ...)
-    remote_check(self, 'commit')
-    return unpack(self:_request('commit', tx_id, {...}))
+function remote_methods:begin()
+    return self:remote_tx_manage('begin')
+end
+
+function remote_methods:commit()
+    return self:remote_tx_manage('commit')
+end
+
+function remote_methods:rollback()
+    return self:remote_tx_manage('rollback')
 end
 
 function remote_methods:rollback(tx_id, ...)

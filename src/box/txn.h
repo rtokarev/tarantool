@@ -123,6 +123,12 @@ txn_region()
 	return &fiber()->gc;
 }
 
+static inline void
+fiber_set_txn(struct fiber *fiber, struct txn *txn)
+{
+	fiber_set_key(fiber, FIBER_KEY_TXN, (void *) txn);
+}
+
 #if defined(__cplusplus)
 } /* extern "C" */
 

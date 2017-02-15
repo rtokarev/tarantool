@@ -553,14 +553,14 @@ boxk(int type, uint32_t space_id, const char *format, ...)
 {
 	va_list ap;
 	struct request *request;
-	request = region_alloc_object(&fiber()->gc, struct request);
+	request = region_alloc_object(txn_region(), struct request);
 	if (request == NULL)
 		return -1;
 	request_create(request, type);
 	request->space_id = space_id;
 	va_start(ap, format);
 	size_t buf_size = mp_vformat(NULL, 0, format, ap);
-	char *buf = (char *)region_alloc(&fiber()->gc, buf_size);
+	char *buf = (char *)region_alloc(txn_region(), buf_size);
 	va_end(ap);
 	if (buf == NULL)
 		return -1;
@@ -700,7 +700,7 @@ box_insert(uint32_t space_id, const char *tuple, const char *tuple_end,
 {
 	mp_tuple_assert(tuple, tuple_end);
 	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
+	request = region_alloc_object_xc(txn_region(), struct request);
 	request_create(request, IPROTO_INSERT);
 	request->space_id = space_id;
 	request->tuple = tuple;
@@ -714,7 +714,7 @@ box_replace(uint32_t space_id, const char *tuple, const char *tuple_end,
 {
 	mp_tuple_assert(tuple, tuple_end);
 	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
+	request = region_alloc_object_xc(txn_region(), struct request);
 	request_create(request, IPROTO_REPLACE);
 	request->space_id = space_id;
 	request->tuple = tuple;
@@ -728,7 +728,7 @@ box_delete(uint32_t space_id, uint32_t index_id, const char *key,
 {
 	mp_tuple_assert(key, key_end);
 	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
+	request = region_alloc_object_xc(txn_region(), struct request);
 	request_create(request, IPROTO_DELETE);
 	request->space_id = space_id;
 	request->index_id = index_id;
@@ -745,7 +745,7 @@ box_update(uint32_t space_id, uint32_t index_id, const char *key,
 	mp_tuple_assert(key, key_end);
 	mp_tuple_assert(ops, ops_end);
 	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
+	request = region_alloc_object_xc(txn_region(), struct request);
 	request_create(request, IPROTO_UPDATE);
 	request->space_id = space_id;
 	request->index_id = index_id;
@@ -766,7 +766,7 @@ box_upsert(uint32_t space_id, uint32_t index_id, const char *tuple,
 	mp_tuple_assert(ops, ops_end);
 	mp_tuple_assert(tuple, tuple_end);
 	struct request *request;
-	request = region_alloc_object_xc(&fiber()->gc, struct request);
+	request = region_alloc_object_xc(txn_region(), struct request);
 	request_create(request, IPROTO_UPSERT);
 	request->space_id = space_id;
 	request->index_id = index_id;
@@ -1047,17 +1047,8 @@ box_process_call(struct request *request, struct obuf *out)
 		credentials_copy(&session->credentials, &orig_credentials);
 	}
 
-	if (rc != 0) {
-		txn_rollback();
+	if (rc != 0)
 		diag_raise();
-	}
-
-	if (in_txn()) {
-		/* The procedure forgot to call box.commit() */
-		say_warn("a transaction is active at return from '%.*s'",
-			name_len, name);
-		txn_rollback();
-	}
 }
 
 void
@@ -1066,19 +1057,8 @@ box_process_eval(struct request *request, struct obuf *out)
 	rmean_collect(rmean_box, IPROTO_EVAL, 1);
 	/* Check permissions */
 	access_check_universe(PRIV_X);
-	if (box_lua_eval(request, out) != 0) {
-		txn_rollback();
+	if (box_lua_eval(request, out) != 0)
 		diag_raise();
-	}
-
-	if (in_txn()) {
-		/* The procedure forgot to call box.commit() */
-		const char *expr = request->key;
-		uint32_t expr_len = mp_decode_strl(&expr);
-		say_warn("a transaction is active at return from EVAL '%.*s'",
-			expr_len, expr);
-		txn_rollback();
-	}
 }
 
 void

@@ -427,46 +427,38 @@ netbox_encode_upsert(lua_State *L)
 	return 0;
 }
 
-static int
-netbox_encode_begin(lua_State *L)
+static inline int
+netbox_encode_txn_op(lua_State *L, enum iproto_type type, const char *method)
 {
+	assert(type == IPROTO_BEGIN || type == IPROTO_ROLLBACK ||
+	       type == IPROTO_COMMIT);
 	if (lua_gettop(L) != 4)
-		return luaL_error(L, "Usage: netbox.encode_begin(ibuf, sync, "
-				     "schema_id, tx_id)");
+		return luaL_error(L, "Usage: netbox.encode_%s(ibuf, sync, "
+				     "schema_id, tx_id)", method);
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_BEGIN, tx_id);
+	size_t svp = netbox_prepare_request(L, &stream, type, tx_id);
 	luamp_encode_map(cfg, &stream, 0);
 	netbox_encode_request(&stream, svp);
 	return 0;
+}
+
+static int
+netbox_encode_begin(lua_State *L)
+{
+	return netbox_encode_txn_op(L, IPROTO_BEGIN, "begin");
 }
 
 static int
 netbox_encode_commit(lua_State *L)
 {
-	if (lua_gettop(L) != 4)
-		return luaL_error(L, "Usage: netbox.encode_commit(ibuf, sync, "
-				     "schema_id, tx_id)");
-	struct mpstream stream;
-	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_COMMIT, tx_id);
-	luamp_encode_map(cfg, &stream, 0);
-	netbox_encode_request(&stream, svp);
-	return 0;
+	return netbox_encode_txn_op(L, IPROTO_COMMIT, "commit");
 }
 
 static int
 netbox_encode_rollback(lua_State *L)
 {
-	if (lua_gettop(L) != 4)
-		return luaL_error(L, "Usage: netbox.encode_rollback(ibuf, sync,"
-				     " schema_id, tx_id)");
-	struct mpstream stream;
-	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_ROLLBACK, tx_id);
-	luamp_encode_map(cfg, &stream, 0);
-	netbox_encode_request(&stream, svp);
-	return 0;
+	return netbox_encode_txn_op(L, IPROTO_ROLLBACK, "rollback");
 }
 
 static int

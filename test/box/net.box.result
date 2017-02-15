@@ -7,9 +7,6 @@ fiber = require 'fiber'
 log = require 'log'
 ---
 ...
-msgpack = require 'msgpack'
----
-...
 env = require('test_run')
 ---
 ...
