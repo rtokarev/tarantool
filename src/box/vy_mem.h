@@ -158,29 +158,17 @@ struct vy_mem {
 /**
  * Instantiate a new in-memory level.
  *
- * @param key_def key definition.
- * @param allocator lsregioni allocator to use for BPS tree extents
+ * @param allocator lsregion allocator to use for BPS tree extents
  * @param allocator_lsn a pointer to the latest LSN for lsregion.
+ * @param key_def key definition.
  * @param format tuple format.
  * @retval new vy_mem instance on success.
  * @retval NULL on error, check diag.
  */
 struct vy_mem *
-vy_mem_new(struct key_def *key_def, struct lsregion *allocator,
-	   const int64_t *allocator_lsn, struct tuple_format *format,
+vy_mem_new(struct lsregion *allocator, const int64_t *allocator_lsn,
+	   struct key_def *key_def, struct tuple_format *format,
 	   struct tuple_format *format_with_colmask);
-
-/**
- * Update formats of vy_mem statements, if vy_mem still is empty.
- * @param mem Memory index to update formats.
- * @param new_format New format for statements without column
- *                   mask.
- * @param new_format_with_colmask New format for statements with
- *                   column mask.
- */
-void
-vy_mem_update_formats(struct vy_mem *mem, struct tuple_format *new_format,
-		      struct tuple_format *new_format_with_colmask);
 
 /**
  * Delete in-memory level.

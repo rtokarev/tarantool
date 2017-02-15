@@ -2721,8 +2721,8 @@ vy_range_new(struct vy_index *index, int64_t id,
 			 "struct vy_range");
 		goto fail;
 	}
-	range->mem = vy_mem_new(index->key_def, allocator, allocator_lsn,
-				index->space->format,
+	range->mem = vy_mem_new(allocator, allocator_lsn,
+				index->key_def, index->space->format,
 				index->space_format_with_colmask);
 	if (range->mem == NULL)
 		goto fail_mem;
@@ -2854,26 +2854,27 @@ vy_range_unfreeze_mem(struct vy_range *range)
  * the old one to the frozen list. Used by dump/compaction in order
  * not to bother about synchronization with concurrent insertions
  * while a range is being dumped. If the active in-memory index is
- * empty, we don't need to dump it and therefore can skip rotation.
+ * empty, we don't need to dump it and therefore can delete it right
+ * away.
  */
 static int
-vy_range_rotate_mem(struct vy_range *range, struct key_def *key_def,
-		    struct lsregion *allocator, const int64_t *allocator_lsn)
+vy_range_rotate_mem(struct vy_range *range)
 {
-	assert(range->mem != NULL);
 	struct vy_index *index = range->index;
-	struct vy_mem *mem = range->mem;
-	if (mem->used == 0) {
-		vy_mem_update_formats(mem, index->space->format,
-				      index->space_format_with_colmask);
-		return 0;
-	}
-	mem = vy_mem_new(key_def, allocator, allocator_lsn,
-			 index->space->format,
+	struct lsregion *allocator = &index->env->allocator;
+	const int64_t *allocator_lsn = &index->env->xm->lsn;
+	struct vy_mem *mem;
+
+	assert(range->mem != NULL);
+	mem = vy_mem_new(allocator, allocator_lsn,
+			 index->key_def, index->space->format,
 			 index->space_format_with_colmask);
 	if (mem == NULL)
 		return -1;
-	vy_range_freeze_mem(range);
+	if (range->mem->used > 0)
+		vy_range_freeze_mem(range);
+	else
+		vy_mem_delete(range->mem);
 	range->mem = mem;
 	range->version++;
 	return 0;
@@ -3663,9 +3664,6 @@ static int
 vy_tx_write(struct txv *v, enum vy_status status, int64_t lsn)
 {
 	struct vy_index *index = v->index;
-	struct key_def *key_def = index->key_def;
-	struct lsregion *allocator = &index->env->allocator;
-	const int64_t *allocator_lsn = &index->env->xm->lsn;
 	struct tuple *stmt = v->stmt;
 	struct vy_range *range = NULL;
 
@@ -3683,15 +3681,15 @@ vy_tx_write(struct txv *v, enum vy_status status, int64_t lsn)
 			return 0;
 	}
 	/* Match range. */
-	range = vy_range_tree_find_by_key(&index->tree, ITER_EQ, key_def, stmt);
+	range = vy_range_tree_find_by_key(&index->tree, ITER_EQ,
+					  index->key_def, stmt);
 	/*
 	 * To avoid mixing statements of different formats in
 	 * the same in-memory tree, allocate a new tree on schema
 	 * version mismatch.
 	 */
 	if (unlikely(range->mem->sc_version != sc_version)) {
-		if (vy_range_rotate_mem(range, key_def,
-					allocator, allocator_lsn) != 0)
+		if (vy_range_rotate_mem(range) != 0)
 			return -1;
 	}
 	int rc;
@@ -3928,7 +3926,6 @@ vy_task_dump_new(struct mempool *pool, struct vy_range *range)
 
 	struct vy_index *index = range->index;
 	struct tx_manager *xm = index->env->xm;
-	struct lsregion *allocator = &index->env->allocator;
 	struct vy_scheduler *scheduler = index->env->scheduler;
 
 	struct vy_task *task = vy_task_new(pool, index, &dump_ops);
@@ -3940,8 +3937,7 @@ vy_task_dump_new(struct mempool *pool, struct vy_range *range)
 	if (vy_range_prepare_new_run(range) != 0)
 		goto err_run;
 
-	if (vy_range_rotate_mem(range, index->key_def,
-				allocator, &xm->lsn) != 0)
+	if (vy_range_rotate_mem(range) != 0)
 		goto err_mem;
 
 	struct vy_write_iterator *wi;
@@ -4356,7 +4352,6 @@ vy_task_compact_new(struct mempool *pool, struct vy_range *range)
 
 	struct vy_index *index = range->index;
 	struct tx_manager *xm = index->env->xm;
-	struct lsregion *allocator = &index->env->allocator;
 	struct vy_scheduler *scheduler = index->env->scheduler;
 
 	struct vy_task *task = vy_task_new(pool, index, &compact_ops);
@@ -4368,8 +4363,7 @@ vy_task_compact_new(struct mempool *pool, struct vy_range *range)
 	if (vy_range_prepare_new_run(range) != 0)
 		goto err_run;
 
-	if (vy_range_rotate_mem(range, index->key_def,
-				allocator, &xm->lsn) != 0)
+	if (vy_range_rotate_mem(range) != 0)
 		goto err_mem;
 
 	struct vy_write_iterator *wi;
