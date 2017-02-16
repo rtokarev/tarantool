@@ -815,9 +815,10 @@ iproto_enqueue_batch(struct iproto_connection *con, struct ibuf *in)
 		if (! is_first_msg)
 			goto after_push;
 push_as_is:
-		cpipe_push_input(&tx_pipe, guard.release());
+		cpipe_push_input(&tx_pipe, msg);
 		n_requests++;
 after_push:
+		guard.release();
 		/* Request is parsed */
 		assert(reqend > reqstart);
 		assert(con->parse_size >= (size_t) (reqend - reqstart));
@@ -1121,6 +1122,7 @@ tx_process1(struct cmsg *m)
 	 * transaction.
 	 */
 	assert(in_txn() == txn);
+	fiber_set_txn(fiber(), NULL);
 	if (tuple && tuple_to_obuf(tuple, out))
 		goto error;
 
@@ -1237,8 +1239,10 @@ tx_process_select(struct cmsg *m)
 	port_dump(&port, out);
 	iproto_reply_select(out, &svp, msg->header.sync, port.size);
 	msg->write_end = obuf_create_svp(out);
+	fiber_set_txn(fiber(), NULL);
 	return;
 error:
+	fiber_set_txn(fiber(), NULL);
 	iproto_reply_error_msg(out, msg);
 }
 
@@ -1296,6 +1300,7 @@ check_txn_finish:
 			 * our transaction.
 			 */
 			assert(in_txn() == NULL);
+			fiber_set_txn(fiber(), NULL);
 			assert(node != NULL);
 			node->txn = NULL;
 			return;
@@ -1321,6 +1326,7 @@ check_txn_finish:
 		box_txn_rollback();
 		return;
 	}
+	fiber_set_txn(fiber(), NULL);
 }
 
 static void
@@ -1400,6 +1406,7 @@ net_send_msg(struct cmsg *m)
 		assert(next != NULL);
 		assert(next->txnode == txnode);
 		cpipe_push_input(&tx_pipe, (struct cmsg *) next);
+		cpipe_flush_input(&tx_pipe);
 	}
 sending:
 	/* Discard request (see iproto_enqueue_batch()) */

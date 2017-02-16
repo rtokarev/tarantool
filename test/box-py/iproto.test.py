@@ -5,7 +5,11 @@ import socket
 import msgpack
 from tarantool.const import *
 from tarantool import Connection
-from tarantool.request import Request, RequestInsert, RequestSelect, RequestUpdate, RequestUpsert
+from tarantool.request import (
+    Request, RequestInsert, RequestSelect, RequestUpdate,
+    RequestUpsert, RequestBegin, RequestCommit, RequestRollback,
+    RequestReplace, RequestDelete, RequestCall
+)
 from tarantool.response import Response
 from lib.tarantool_connection import TarantoolConnection
 
@@ -62,6 +66,18 @@ def test(header, body):
         print '   => ', 'Failed to send request'
     c.close()
     print iproto.py_con.ping() > 0
+
+def execute_and_print_request(connection, request, *args):
+    data = bytes(request)
+    for r in args:
+        data += bytes(r)
+    try:
+        connection._socket.send(data)
+    except OSError as e:
+        print '   => ', 'Failed to send request'
+    for i in range(len(args) + 1):
+        response = Response(connection, connection._read_response())
+        print response.__str__()
 
 print """
 #  Test gh-206 "Segfault if sending IPROTO package without `KEY` field"
@@ -364,6 +380,65 @@ except OSError as e:
     print '   => ', 'Failed to send request'
 response = Response(c, c._read_response())
 print response.__str__()
+
+c.close()
+admin("space:drop()")
+
+#
+# gh-2016 in tarantool - check working of remote transactions.
+#
+admin("space = box.schema.create_space('gh2016', { id = 569, engine = 'vinyl' })")
+admin("index = space:create_index('primary')")
+admin("box.schema.user.grant('guest', 'read,write,execute', 'universe')")
+admin("fiber = require('fiber')")
+admin("function long_f() fiber.sleep(0.5) space:replace({1, 1, 1, 1}) end ")
+
+c = Connection('localhost', server.iproto.port)
+c.connect()
+
+#
+# Test remote transactions.
+#
+execute_and_print_request(c, RequestBegin(c, 22))
+
+execute_and_print_request(c, RequestReplace(c, 569, [1], tx_id=22))
+execute_and_print_request(c, RequestReplace(c, 569, [2], tx_id=22))
+# Select with the read view returns transaction changes.
+execute_and_print_request(c, RequestSelect(c, 569, 0, [], 0, 1000, ITERATOR_GE,
+                          tx_id=22))
+# Select without transaction id returns nothing, because changes
+# are not commited.
+execute_and_print_request(c, RequestSelect(c, 569, 0, [], 0, 1000, ITERATOR_GE))
+
+execute_and_print_request(c, RequestCommit(c, 22))
+
+execute_and_print_request(c, RequestSelect(c, 569, 0, [], 0, 1000, ITERATOR_GE))
+
+# Try to send batches of data in one transaction.
+
+execute_and_print_request(c, RequestBegin(c, 23))
+
+replace = RequestReplace(c, 569, [1, 1], tx_id=23)
+select = RequestSelect(c, 569, 0, [], 0, 1000, ITERATOR_GE, tx_id=23)
+delete = RequestDelete(c, 569, 0, [1], tx_id=23)
+
+print 'Start of the batching'
+
+execute_and_print_request(c, select, replace, select, delete, select, replace,
+                          select, delete, select)
+
+print 'Next batch'
+
+# First request in the batch is long, but the second doesn't
+# start until the first finished.
+execute_and_print_request(c, RequestCall(c, 'long_f', [], tx_id=23), replace)
+
+execute_and_print_request(c, RequestSelect(c, 569, 0, [], 0, 1000, ITERATOR_GE,
+                          tx_id=23))
+
+print 'End of the batching'
+
+execute_and_print_request(c, RequestCommit(c, 23))
 
 c.close()
 admin("space:drop()")

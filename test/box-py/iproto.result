@@ -192,3 +192,76 @@ box.schema.user.grant('guest', 'read,write,execute', 'space', 'test_index_base')
 space:drop()
 ---
 ...
+space = box.schema.create_space('gh2016', { id = 569, engine = 'vinyl' })
+---
+...
+index = space:create_index('primary')
+---
+...
+box.schema.user.grant('guest', 'read,write,execute', 'universe')
+---
+...
+fiber = require('fiber')
+---
+...
+function long_f() fiber.sleep(0.5) space:replace({1, 1, 1, 1}) end 
+---
+...
+null
+...
+
+- [1]
+
+- [2]
+
+- [1]
+- [2]
+
+[]
+
+null
+...
+
+- [1]
+- [2]
+
+null
+...
+
+Start of the batching
+- [1]
+- [2]
+
+- [1, 1]
+
+- [1, 1]
+- [2]
+
+[]
+
+- [2]
+
+- [1, 1]
+
+- [1, 1]
+- [2]
+
+[]
+
+- [2]
+
+Next batch
+[]
+
+- [1, 1]
+
+- [1, 1]
+- [2]
+
+End of the batching
+null
+...
+
+space:drop()
+---
+...
