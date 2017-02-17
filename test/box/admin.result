@@ -20,6 +20,8 @@ cfg_filter(box.cfg)
 ---
 - - - background
     - false
+  - - bytes_per_wal
+    - 274877906944
   - - checkpoint_count
     - 6
   - - checkpoint_interval

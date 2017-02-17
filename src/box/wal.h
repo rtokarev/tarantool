@@ -74,7 +74,7 @@ wal_thread_start();
 void
 wal_init(enum wal_mode wal_mode, const char *wal_dirname,
 	 const struct tt_uuid *instance_uuid, struct vclock *vclock,
-	 int64_t rows_per_wal);
+	 int64_t rows_per_wal, int64_t bytes_per_wal);
 
 void
 wal_thread_stop();

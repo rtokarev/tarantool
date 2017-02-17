@@ -386,6 +386,17 @@ box_check_rows_per_wal(int64_t rows_per_wal)
 	return rows_per_wal;
 }
 
+static int64_t
+box_check_bytes_per_wal(int64_t bytes_per_wal)
+{
+	/* check rows_per_wal configuration */
+	if (bytes_per_wal <= 1) {
+		tnt_raise(ClientError, ER_CFG, "bytes_per_wal",
+			  "the value must be greater than one");
+	}
+	return bytes_per_wal;
+}
+
 void
 box_check_config()
 {
@@ -1624,10 +1635,11 @@ box_cfg_xc(void)
 
 	/* Start WAL writer */
 	int64_t rows_per_wal = box_check_rows_per_wal(cfg_geti64("rows_per_wal"));
+	int64_t bytes_per_wal = box_check_bytes_per_wal(cfg_geti64("bytes_per_wal"));
 	enum wal_mode wal_mode = box_check_wal_mode(cfg_gets("wal_mode"));
 	if (wal_mode != WAL_NONE) {
 		wal_init(wal_mode, cfg_gets("wal_dir"), &INSTANCE_UUID,
-			 &recovery->vclock, rows_per_wal);
+			 &recovery->vclock, rows_per_wal, bytes_per_wal);
 	}
 
 	rmean_cleanup(rmean_box);
