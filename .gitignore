@@ -127,7 +127,9 @@ obj-*/
 parts/
 prime/
 stage/
+*.xlog
 *.snap
+*.vymeta
 ftp.log
 sftp.log
 ftpscript.txt
