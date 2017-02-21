@@ -93,6 +93,14 @@ lbox_rollback(lua_State *L)
 }
 
 static int
+lbox_prepare_two_phase(lua_State *L)
+{
+	if (box_txn_prepare_two_phase() != 0)
+		return luaT_error(L);
+	return 0;
+}
+
+static int
 lbox_snapshot(struct lua_State *L)
 {
 	int ret = box_snapshot();
@@ -106,6 +114,7 @@ lbox_snapshot(struct lua_State *L)
 static const struct luaL_reg boxlib[] = {
 	{"commit", lbox_commit},
 	{"rollback", lbox_rollback},
+	{"prepare_two_phase", lbox_prepare_two_phase},
 	{"snapshot", lbox_snapshot},
 	{NULL, NULL}
 };

@@ -179,7 +179,10 @@ struct errcode_record {
 	/*124 */_(ER_DECOMPRESSION,		"Decompression error: %s") \
 	/*125 */_(ER_INVALID_XLOG_TYPE,		"Invalid xlog type: expected %s, got %s") \
 	/*126 */_(ER_ALREADY_RUNNING,		"Failed to lock WAL directory %s and hot_standby mode is off") \
-	/*127 */_(ER_INDEX_FIELD_COUNT_LIMIT,	"Indexed field count limit reached: %d indexed fields")
+	/*127 */_(ER_INDEX_FIELD_COUNT_LIMIT,	"Indexed field count limit reached: %d indexed fields") \
+	/*128 */_(ER_ALREADY_PREPARED,          "The transaction already prepared") \
+	/*129 */_(ER_CHANGE_PREPARED,           "The prepared transaction can't be changed") \
+	/*130 */_(ER_COMMIT_BEFORE_PREPARE,     "Can't commit the two-phase transaction before prepare")
 
 /*
  * !IMPORTANT! Please follow instructions at start of the file

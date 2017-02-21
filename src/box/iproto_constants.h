@@ -58,6 +58,7 @@ enum iproto_key {
 	IPROTO_TIMESTAMP = 0x04,
 	IPROTO_SCHEMA_ID = 0x05,
 	IPROTO_TRANSACTION_ID = 0x06,
+	IPROTO_COORDINATOR_ID = 0x07,
 	/* Leave a gap for other keys in the header. */
 	IPROTO_SPACE_ID = 0x10,
 	IPROTO_INDEX_ID = 0x11,
@@ -135,7 +136,8 @@ enum iproto_type {
 	IPROTO_BEGIN = 11,
 	IPROTO_COMMIT = 12,
 	IPROTO_ROLLBACK = 13,
-	IPROTO_TYPE_STAT_MAX = IPROTO_ROLLBACK + 1,
+	IPROTO_PREPARE = 14,
+	IPROTO_TYPE_STAT_MAX = IPROTO_PREPARE + 1,
 	/* admin command codes */
 	IPROTO_PING = 64,
 	IPROTO_JOIN = 65,

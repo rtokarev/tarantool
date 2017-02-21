@@ -72,6 +72,23 @@ extern double too_long_threshold;
 struct tuple;
 
 struct txn {
+	/**
+	 * Identifier of the transaction, used to making two-phase
+	 * commit.
+	 */
+	uint64_t tx_id;
+	/**
+	 * Identifier of the coordinator of the two-phase commit.
+	 */
+	uint32_t coordinator_id;
+	/** True, if the transaction is two-phase. */
+	bool is_two_phase;
+	/**
+	 * True, if the 'prepare' was called and the transaction
+	 * is frozen - it can be anymore changed, and must either
+	 * commit or rollback.
+	 */
+	bool in_prepare;
 	/** List of statements in a transaction. */
 	struct stailq stmts;
 	/** Total number of WAL rows in this txn. */
@@ -138,6 +155,25 @@ fiber_set_txn(struct fiber *fiber, struct txn *txn)
  */
 struct txn *
 txn_begin(bool is_autocommit);
+
+/**
+ * Start a two phase transaction.
+ * @param tx_id          Identifier of the transaction.
+ * @param coordinator_id Identifier of the transaction
+ *                       coordinator.
+ * @pre no transaction is active
+ */
+struct txn *
+txn_begin_two_phase(uint64_t tx_id, uint32_t coordinator_id);
+
+/**
+ * Prepare the two-phase transaction.
+ * @param txn    Transaction to prepare.
+ * @param header Header of the request on the transaction
+ *               preparation.
+ */
+void
+txn_prepare_two_phase(struct txn *txn, struct xrow_header *header);
 
 /**
  * Commit a transaction.
@@ -287,6 +323,26 @@ box_txn(void);
  */
 API_EXPORT int
 box_txn_begin(void);
+
+/**
+ * Begin a two phase transaction in the current fiber.
+ *
+ * A transaction is attached to caller fiber, therefore one fiber can have
+ * only one active transaction.
+ * @retval 0 - success
+ * @retval -1 - failed, perhaps a transaction has already been
+ * started
+ */
+API_EXPORT int
+box_txn_begin_two_phase();
+
+/**
+ * Prepare the current two-phase transaction.
+ * @retval  0 Success.
+ * @retval -1 Failed, perhaps a disk write failure.
+ */
+API_EXPORT int
+box_txn_prepare_two_phase(void);
 
 /**
  * Commit the current transaction.

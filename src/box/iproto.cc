@@ -473,7 +473,8 @@ static const struct cmsg_hop *dml_route[IPROTO_TYPE_STAT_MAX] = {
 	misc_route,                             /* IPROTO_CALL */
 	process_transaction_route,              /* IPROTO_BEGIN */
 	process_transaction_route,              /* IPROTO_COMMIT */
-	process_transaction_route               /* IPROTO_ROLLBACK */
+	process_transaction_route,              /* IPROTO_ROLLBACK */
+	process_transaction_route               /* IPROTO_PREPARE */
 };
 
 static const struct cmsg_hop sync_route[] = {
@@ -707,6 +708,7 @@ iproto_decode_msg(struct iproto_msg *msg, const char **pos, const char *reqend,
 	case IPROTO_BEGIN:
 	case IPROTO_COMMIT:
 	case IPROTO_ROLLBACK:
+	case IPROTO_PREPARE:
 		assert(msg->header.type < sizeof(dml_route)/sizeof(*dml_route));
 		cmsg_init(msg, dml_route[msg->header.type]);
 		break;
@@ -1163,7 +1165,20 @@ tx_process_remote_txn(struct cmsg *m)
 			diag_set(ClientError, ER_ACTIVE_TRANSACTION);
 			goto error;
 		}
-		if (box_txn_begin() != 0)
+		int rc;
+		uint32_t coordinator_id = msg->header.coordinator_id;
+		if (coordinator_id != 0) {
+			try {
+				txn_begin_two_phase(msg->header.tx_id,
+						    coordinator_id);
+				rc = 0;
+			} catch (Exception *e) {
+				rc = -1;
+			}
+		} else {
+			rc = box_txn_begin();
+		}
+		if (rc != 0)
 			goto error;
 		struct txn *txn = in_txn();
 		assert(txn != NULL);
@@ -1183,15 +1198,24 @@ tx_process_remote_txn(struct cmsg *m)
 		if (box_txn_commit() != 0)
 			goto error;
 		node->txn = NULL;
-		goto ok;
-	}
-	if (type == IPROTO_ROLLBACK) {
+	} else if (type == IPROTO_ROLLBACK) {
 		if (box_txn_rollback() != 0)
 			goto error;
 		node->txn = NULL;
-		goto ok;
+	} else if (type == IPROTO_PREPARE) {
+		struct txn *txn = in_txn();
+		if (! txn) {
+			diag_set(ClientError, ER_NO_ACTIVE_TRANSACTION);
+			goto error;
+		}
+		try {
+			txn_prepare_two_phase(txn, &msg->header);
+		}
+		catch(Exception *e) {
+			goto error;
+		}
 	}
-	unreachable();
+	goto ok;
 error:
 	fiber_set_txn(fiber(), NULL);
 	iproto_reply_error_msg(out, msg);

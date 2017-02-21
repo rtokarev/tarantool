@@ -263,6 +263,12 @@ VinylEngine::prepare(struct txn *txn)
 		diag_raise();
 }
 
+void
+VinylEngine::prepare_two_phase(struct txn *txn)
+{
+	prepare(txn);
+}
+
 static inline void
 txn_stmt_unref_tuples(struct txn_stmt *stmt)
 {

@@ -104,6 +104,7 @@ public:
 	 * a transaction for commit in the engine.
 	 */
 	virtual void prepare(struct txn *);
+	virtual void prepare_two_phase(struct txn *);
 	/**
 	 * End the transaction in the engine, the transaction
 	 * has been successfully written to the WAL.

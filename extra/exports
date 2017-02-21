@@ -109,6 +109,8 @@ luaL_touint64
 luaL_toint64
 box_txn
 box_txn_begin
+box_txn_begin_two_phase
+box_txn_prepare_two_phase
 box_txn_commit
 box_txn_rollback
 box_txn_alloc

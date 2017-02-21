@@ -93,6 +93,9 @@ error:
 		case IPROTO_TRANSACTION_ID:
 			header->tx_id = mp_decode_uint(pos);
 			break;
+		case IPROTO_COORDINATOR_ID:
+			header->coordinator_id = mp_decode_uint(pos);
+			break;
 		default:
 			/* unknown header */
 			mp_next(pos);
@@ -179,6 +182,12 @@ xrow_header_encode(const struct xrow_header *header, struct iovec *out,
 	if (true) {
 		d = mp_encode_uint(d, IPROTO_TRANSACTION_ID);
 		d = mp_encode_uint(d, header->tx_id);
+		map_size++;
+	}
+
+	if (header->coordinator_id != 0) {
+		d = mp_encode_uint(d, IPROTO_COORDINATOR_ID);
+		d = mp_encode_uint(d, header->coordinator_id);
 		map_size++;
 	}
 

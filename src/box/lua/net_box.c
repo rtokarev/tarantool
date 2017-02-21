@@ -50,7 +50,7 @@
 
 static inline size_t
 netbox_prepare_request(lua_State *L, struct mpstream *stream, uint32_t r_type,
-		       uint64_t tx_id)
+		       uint64_t tx_id, uint32_t coordinator_id)
 {
 	struct ibuf *ibuf = (struct ibuf *) lua_topointer(L, 1);
 	uint64_t sync = luaL_touint64(L, 2);
@@ -68,7 +68,7 @@ netbox_prepare_request(lua_State *L, struct mpstream *stream, uint32_t r_type,
 	mpstream_advance(stream, fixheader_size);
 
 	/* encode header */
-	luamp_encode_map(cfg, stream, 4);
+	luamp_encode_map(cfg, stream, coordinator_id == 0 ? 4 : 5);
 
 	luamp_encode_uint(cfg, stream, IPROTO_SYNC);
 	luamp_encode_uint(cfg, stream, sync);
@@ -81,6 +81,11 @@ netbox_prepare_request(lua_State *L, struct mpstream *stream, uint32_t r_type,
 
 	luamp_encode_uint(cfg, stream, IPROTO_TRANSACTION_ID);
 	luamp_encode_uint(cfg, stream, tx_id);
+
+	if (coordinator_id != 0) {
+		luamp_encode_uint(cfg, stream, IPROTO_COORDINATOR_ID);
+		luamp_encode_uint(cfg, stream, coordinator_id);
+	}
 
 	/* Caller should remember how many bytes was used in ibuf */
 	return used;
@@ -120,7 +125,7 @@ netbox_encode_ping(lua_State *L)
 				"schema_id)");
 
 	struct mpstream stream;
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_PING, 0);
+	size_t svp = netbox_prepare_request(L, &stream, IPROTO_PING, 0, 0);
 	netbox_encode_request(&stream, svp);
 	return 0;
 }
@@ -133,7 +138,7 @@ netbox_encode_auth(lua_State *L)
 		       "schema_id, user, password, greeting)");
 
 	struct mpstream stream;
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_AUTH, 0);
+	size_t svp = netbox_prepare_request(L, &stream, IPROTO_AUTH, 0, 0);
 
 	size_t user_len;
 	const char *user = lua_tolstring(L, 4, &user_len);
@@ -170,7 +175,7 @@ netbox_encode_call_impl(lua_State *L, enum iproto_type type)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, type, tx_id);
+	size_t svp = netbox_prepare_request(L, &stream, type, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 2);
 
@@ -209,7 +214,7 @@ netbox_encode_eval(lua_State *L)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_EVAL, tx_id);
+	size_t svp = netbox_prepare_request(L, &stream, IPROTO_EVAL, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 2);
 
@@ -237,7 +242,8 @@ netbox_encode_select(lua_State *L)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_SELECT, tx_id);
+	size_t svp =
+		netbox_prepare_request(L, &stream, IPROTO_SELECT, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 6);
 
@@ -285,7 +291,7 @@ netbox_encode_insert_or_replace(lua_State *L, uint32_t reqtype)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, reqtype, tx_id);
+	size_t svp = netbox_prepare_request(L, &stream, reqtype, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 2);
 
@@ -323,7 +329,8 @@ netbox_encode_delete(lua_State *L)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_DELETE, tx_id);
+	size_t svp =
+		netbox_prepare_request(L, &stream, IPROTO_DELETE, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 3);
 
@@ -354,7 +361,8 @@ netbox_encode_update(lua_State *L)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_UPDATE, tx_id);
+	size_t svp =
+		netbox_prepare_request(L, &stream, IPROTO_UPDATE, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 5);
 
@@ -395,7 +403,8 @@ netbox_encode_upsert(lua_State *L)
 
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, IPROTO_UPSERT, tx_id);
+	size_t svp =
+		netbox_prepare_request(L, &stream, IPROTO_UPSERT, tx_id, 0);
 
 	luamp_encode_map(cfg, &stream, 5);
 
@@ -431,13 +440,13 @@ static inline int
 netbox_encode_txn_op(lua_State *L, enum iproto_type type, const char *method)
 {
 	assert(type == IPROTO_BEGIN || type == IPROTO_ROLLBACK ||
-	       type == IPROTO_COMMIT);
+	       type == IPROTO_COMMIT || type == IPROTO_PREPARE);
 	if (lua_gettop(L) != 4)
 		return luaL_error(L, "Usage: netbox.encode_%s(ibuf, sync, "
 				     "schema_id, tx_id)", method);
 	struct mpstream stream;
 	uint64_t tx_id = lua_tointeger(L, 4);
-	size_t svp = netbox_prepare_request(L, &stream, type, tx_id);
+	size_t svp = netbox_prepare_request(L, &stream, type, tx_id, 0);
 	luamp_encode_map(cfg, &stream, 0);
 	netbox_encode_request(&stream, svp);
 	return 0;
@@ -453,6 +462,41 @@ static int
 netbox_encode_commit(lua_State *L)
 {
 	return netbox_encode_txn_op(L, IPROTO_COMMIT, "commit");
+}
+
+/**
+ * Special function to encode requests for two-phase transactions,
+ * that encodes the identifier of the coordinator in addition to
+ * other fields.
+ */
+static inline int
+netbox_encode_txn_2pc_op(lua_State *L, enum iproto_type type,
+			 const char *method)
+{
+	assert(type == IPROTO_BEGIN || type == IPROTO_PREPARE);
+	if (lua_gettop(L) != 5)
+		return luaL_error(L, "Usage: netbox.encode_%s("\
+				     "ibuf, sync, schema_id, tx_id, "\
+				     "coordinator_id)", method);
+	struct mpstream stream;
+	uint64_t tx_id = lua_tointeger(L, 4);
+	uint32_t coordinator_id = lua_tointeger(L, 5);
+	size_t svp = netbox_prepare_request(L, &stream, type, tx_id,
+					    coordinator_id);
+	netbox_encode_request(&stream, svp);
+	return 0;
+}
+
+static int
+netbox_encode_prepare(lua_State *L)
+{
+	return netbox_encode_txn_2pc_op(L, IPROTO_PREPARE, "prepare");
+}
+
+static int
+netbox_encode_begin_two_phase(lua_State *L)
+{
+	return netbox_encode_txn_2pc_op(L, IPROTO_BEGIN, "begin_two_phase");
 }
 
 static int
@@ -619,6 +663,8 @@ luaopen_net_box(struct lua_State *L)
 		{ "encode_begin",   netbox_encode_begin },
 		{ "encode_commit",  netbox_encode_commit },
 		{ "encode_rollback", netbox_encode_rollback },
+		{ "encode_begin_two_phase", netbox_encode_begin_two_phase },
+		{ "encode_prepare", netbox_encode_prepare },
 		{ "encode_auth",    netbox_encode_auth },
 		{ "decode_greeting",netbox_decode_greeting },
 		{ "communicate",    netbox_communicate },

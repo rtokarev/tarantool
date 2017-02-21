@@ -348,6 +348,169 @@ local_space:select{}
 - - [1]
   - [2]
 ...
+f1:cancel()
+---
+...
+f2:cancel()
+---
+...
+-- Check remote two-phase transactions.
+conn = remote.connect(LISTEN.host, LISTEN.service)
+---
+...
+log.info("state is %s", conn.state)
+---
+...
+conn:ping()
+---
+- true
+...
+server_id = box.info().server.id
+---
+...
+remote_space = conn.space.test
+---
+...
+-- Wrong usage
+conn:begin_two_phase() -- fail with incorrect argument
+---
+- error: 'Usage: begin_two_phase(coordinator_id)'
+...
+conn:prepare()
+---
+- error: 'Usage: prepare(coordinator_id)'
+...
+-- Commit the empty transaction.
+conn:begin_two_phase(server_id)
+---
+- true
+...
+conn:prepare(server_id)
+---
+- true
+...
+conn:commit()
+---
+- true
+...
+-- Try to commit not prepared transaction.
+conn:begin_two_phase(server_id)
+---
+- true
+...
+conn:commit() -- fail, firstly need prepare.
+---
+- error: Can't commit the two-phase transaction before prepare
+...
+conn:prepare(server_id)
+---
+- true
+...
+conn:commit() -- ok, the transaction prepared.
+---
+- true
+...
+-- Rollback not prepared transaction.
+conn:begin_two_phase(server_id)
+---
+- true
+...
+remote_space:replace({14})
+---
+- [14]
+...
+remote_space:replace({15})
+---
+- [15]
+...
+remote_space:select{}
+---
+- - [1]
+  - [2]
+  - [14]
+  - [15]
+...
+conn:rollback()
+---
+- true
+...
+remote_space:select{}
+---
+- - [1]
+  - [2]
+...
+-- Rollback prepared.
+conn:begin_two_phase(server_id)
+---
+- true
+...
+remote_space:replace({14})
+---
+- [14]
+...
+remote_space:replace({15})
+---
+- [15]
+...
+remote_space:select{}
+---
+- - [1]
+  - [2]
+  - [14]
+  - [15]
+...
+conn:prepare(server_id)
+---
+- true
+...
+conn:rollback()
+---
+- true
+...
+remote_space:select{}
+---
+- - [1]
+  - [2]
+...
+-- Modify prepared.
+conn:begin_two_phase(server_id)
+---
+- true
+...
+remote_space:replace({16})
+---
+- [16]
+...
+remote_space:select{}
+---
+- - [1]
+  - [2]
+  - [16]
+...
+conn:prepare(server_id)
+---
+- true
+...
+remote_space:replace({17})
+---
+- error: The prepared transaction can't be changed
+...
+conn:commit()
+---
+- true
+...
+remote_space:select{}
+---
+- - [1]
+  - [2]
+  - [16]
+...
+local_space:select{}
+---
+- - [1]
+  - [2]
+  - [16]
+...
 local_space:drop()
 ---
 ...
