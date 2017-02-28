@@ -64,9 +64,14 @@ void Engine::beginStatement(struct txn *)
 void Engine::prepare(struct txn *)
 {}
 
-void Engine::prepare_two_phase(struct txn *)
+void Engine::begin_prepare_two_phase(struct txn *)
 {
 	tnt_raise(ClientError, ER_UNSUPPORTED, this->name, "prepare_two_phase");
+}
+
+void Engine::end_prepare_two_phase(struct txn *, int64_t)
+{
+	panic("not implemented");
 }
 
 void Engine::commit(struct txn *, int64_t)

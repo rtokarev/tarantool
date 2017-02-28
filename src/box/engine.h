@@ -104,7 +104,17 @@ public:
 	 * a transaction for commit in the engine.
 	 */
 	virtual void prepare(struct txn *);
-	virtual void prepare_two_phase(struct txn *);
+	/**
+	 * Called before writing the two-phase transaction to WAL.
+	 * Here need to check conflicts.
+	 */
+	virtual void begin_prepare_two_phase(struct txn *);
+	/**
+	 * Called after writing the two-phase transaction to WAL.
+	 * The second parameter is LSN of the prepared
+	 * transaction.
+	 */
+	virtual void end_prepare_two_phase(struct txn *, int64_t);
 	/**
 	 * End the transaction in the engine, the transaction
 	 * has been successfully written to the WAL.

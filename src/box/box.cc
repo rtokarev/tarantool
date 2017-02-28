@@ -245,8 +245,25 @@ apply_row(struct xstream *stream, struct xrow_header *row)
 	assert(row->bodycnt == 1); /* always 1 for read */
 	(void) stream;
 	struct request *request = xrow_decode_request(row);
-	struct space *space = space_cache_find(request->space_id);
-	process_rw(request, space, NULL);
+	if (row->type != IPROTO_PREPARE && row->type != IPROTO_COMMIT &&
+	    row->type != IPROTO_ROLLBACK) {
+		struct space *space = space_cache_find(request->space_id);
+		process_rw(request, space, NULL);
+	} else if (row->type == IPROTO_PREPARE) {
+		if (box_txn_begin_two_phase(row->tx_id,
+					    row->coordinator_id) != 0)
+			diag_raise();
+	} else if (row->type == IPROTO_COMMIT) {
+		struct xrow_header header;
+		memcpy(&header, row, sizeof(header));
+		header.type = IPROTO_PREPARE;
+		txn_prepare_two_phase(in_txn(), &header);
+		if (box_txn_commit() != 0)
+			diag_raise();
+	} else if (row->type == IPROTO_ROLLBACK) {
+		if (box_txn_rollback())
+			diag_raise();
+	}
 }
 
 struct wal_stream {
@@ -267,8 +284,10 @@ apply_wal_row(struct xstream *stream, struct xrow_header *row)
 	/**
 	 * Yield once in a while, but not too often,
 	 * mostly to allow signal handling to take place.
+	 * But if there is an active transaction, we can't yield
+	 * and start to recover the next transactions.
 	 */
-	if (++xstream->rows % xstream->yield == 0)
+	if (++xstream->rows % xstream->yield == 0 && in_txn() == NULL)
 		fiber_sleep(0);
 }
 

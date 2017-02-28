@@ -123,7 +123,8 @@ const uint64_t iproto_body_key_map[IPROTO_TYPE_STAT_MAX] = {
 	bit(FUNCTION_NAME) | bit(TUPLE),                       /* CALL */
 	0,                                                     /* BEGIN */
 	0,                                                     /* COMMIT */
-	0                                                      /* ROLLBACK */
+	0,                                                     /* ROLLBACK */
+	0                                                      /* PREPARE */
 };
 #undef bit
 

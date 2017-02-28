@@ -483,6 +483,7 @@ netbox_encode_txn_2pc_op(lua_State *L, enum iproto_type type,
 	uint32_t coordinator_id = lua_tointeger(L, 5);
 	size_t svp = netbox_prepare_request(L, &stream, type, tx_id,
 					    coordinator_id);
+	luamp_encode_map(cfg, &stream, 0);
 	netbox_encode_request(&stream, svp);
 	return 0;
 }

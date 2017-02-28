@@ -91,4 +91,67 @@ f1:wakeup() -- good_tx commit
 f2:wakeup() -- bad_tx fiber is dead
 space:select{}
 
+-- Test recovery.
+
+test_run:cmd('restart server default')
+fiber = require('fiber')
+test_run = require('test_run').new()
+space = box.space.test
+server_id = box.info().server.id
+tx_id = fiber.id()
+space:select{}
+
+box.begin_two_phase(tx_id, server_id)
+space:replace({1})
+space:replace({2})
+space:select{}
+box.prepare_two_phase()
+box.commit()
+space:select{}
+
+test_run:cmd('restart server default')
+fiber = require('fiber')
+test_run = require('test_run').new()
+space = box.space.test
+server_id = box.info().server.id
+tx_id = fiber.id()
+space:select{}
+
+box.begin_two_phase(tx_id, server_id)
+space:replace({1, 1})
+space:replace({2, 2})
+space:select{}
+box.prepare_two_phase()
+box.rollback()
+space:select{}
+
+test_run:cmd('restart server default')
+fiber = require('fiber')
+test_run = require('test_run').new()
+space = box.space.test
+server_id = box.info().server.id
+tx_id = fiber.id()
+space:select{}
+
+-- Test recovery of rollback before prepare.
+
+test_run:cmd('restart server default')
+fiber = require('fiber')
+test_run = require('test_run').new()
+space = box.space.test
+server_id = box.info().server.id
+tx_id = fiber.id()
+space:select{}
+
+box.begin_two_phase(tx_id, server_id)
+space:replace({1, 1, 1})
+space:replace({2, 2, 2})
+space:select{}
+box.rollback()
+space:select{}
+
+test_run:cmd('restart server default')
+space = box.space.test
+space:select{}
+
 space:drop()

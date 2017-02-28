@@ -264,9 +264,18 @@ VinylEngine::prepare(struct txn *txn)
 }
 
 void
-VinylEngine::prepare_two_phase(struct txn *txn)
+VinylEngine::begin_prepare_two_phase(struct txn *txn)
 {
 	prepare(txn);
+}
+
+void
+VinylEngine::end_prepare_two_phase(struct txn *txn, int64_t signature)
+{
+	struct vy_tx *tx = (struct vy_tx *) txn->engine_tx;
+	/* Save the lsn in the statements. */
+	if (vy_end_prepare_two_phase(env, tx, signature) != 0)
+		diag_raise();
 }
 
 static inline void

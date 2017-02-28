@@ -146,6 +146,18 @@ fiber_set_txn(struct fiber *fiber, struct txn *txn)
 	fiber_set_key(fiber, FIBER_KEY_TXN, (void *) txn);
 }
 
+/**
+ * Fill the xrow header with transactional data.
+ * Here we save the operation type (COMMIT/ROLLBACK/PREPARE),
+ * tansaction and coordinator identifiers, create empty body.
+ * @param header Header to encode to.
+ * @param txn    Current transaction.
+ * @param op_type Operation type.
+ */
+void
+xrow_header_encode_2pc(struct xrow_header *header, struct txn *txn,
+		       uint32_t op_type);
+
 #if defined(__cplusplus)
 } /* extern "C" */
 

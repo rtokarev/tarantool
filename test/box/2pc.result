@@ -243,6 +243,178 @@ space:select{}
 ---
 - - [1, 11]
 ...
+-- Test recovery.
+test_run:cmd('restart server default')
+fiber = require('fiber')
+---
+...
+test_run = require('test_run').new()
+---
+...
+space = box.space.test
+---
+...
+server_id = box.info().server.id
+---
+...
+tx_id = fiber.id()
+---
+...
+space:select{}
+---
+- - [1, 11]
+...
+box.begin_two_phase(tx_id, server_id)
+---
+...
+space:replace({1})
+---
+- [1]
+...
+space:replace({2})
+---
+- [2]
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+box.prepare_two_phase()
+---
+...
+box.commit()
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+test_run:cmd('restart server default')
+fiber = require('fiber')
+---
+...
+test_run = require('test_run').new()
+---
+...
+space = box.space.test
+---
+...
+server_id = box.info().server.id
+---
+...
+tx_id = fiber.id()
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+box.begin_two_phase(tx_id, server_id)
+---
+...
+space:replace({1, 1})
+---
+- [1, 1]
+...
+space:replace({2, 2})
+---
+- [2, 2]
+...
+space:select{}
+---
+- - [1, 1]
+  - [2, 2]
+...
+box.prepare_two_phase()
+---
+...
+box.rollback()
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+test_run:cmd('restart server default')
+fiber = require('fiber')
+---
+...
+test_run = require('test_run').new()
+---
+...
+space = box.space.test
+---
+...
+server_id = box.info().server.id
+---
+...
+tx_id = fiber.id()
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+-- Test recovery of rollback before prepare.
+test_run:cmd('restart server default')
+fiber = require('fiber')
+---
+...
+test_run = require('test_run').new()
+---
+...
+space = box.space.test
+---
+...
+server_id = box.info().server.id
+---
+...
+tx_id = fiber.id()
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+box.begin_two_phase(tx_id, server_id)
+---
+...
+space:replace({1, 1, 1})
+---
+- [1, 1, 1]
+...
+space:replace({2, 2, 2})
+---
+- [2, 2, 2]
+...
+space:select{}
+---
+- - [1, 1, 1]
+  - [2, 2, 2]
+...
+box.rollback()
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
+test_run:cmd('restart server default')
+space = box.space.test
+---
+...
+space:select{}
+---
+- - [1]
+  - [2]
+...
 space:drop()
 ---
 ...

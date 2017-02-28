@@ -207,6 +207,9 @@ int
 vy_prepare(struct vy_env *e, struct vy_tx *tx);
 
 int
+vy_end_prepare_two_phase(struct vy_env *e, struct vy_tx *tx, int64_t lsn);
+
+int
 vy_commit(struct vy_env *e, struct vy_tx *tx, int64_t lsn);
 
 void

@@ -6998,11 +6998,30 @@ vy_prepare(struct vy_env *e, struct vy_tx *tx)
 }
 
 int
+vy_end_prepare_two_phase(struct vy_env *e, struct vy_tx *tx, int64_t lsn)
+{
+	for (struct txv *v = write_set_first(&tx->write_set);
+	     v != NULL; v = write_set_next(&tx->write_set, v))
+		vy_stmt_set_lsn(v->stmt, lsn);
+	if (lsn > e->xm->lsn)
+		e->xm->lsn = lsn;
+	return 0;
+}
+
+int
 vy_commit(struct vy_env *e, struct vy_tx *tx, int64_t lsn)
 {
 	assert(tx->state == VINYL_TX_COMMIT);
-	if (lsn > e->xm->lsn)
-		e->xm->lsn = lsn;
+	if (lsn == -1) {
+		/*
+		 * This is two phase transaction, and the LSN is
+		 * already set in the statements.
+		 */
+		lsn = vy_stmt_lsn(write_set_first(&tx->write_set)->stmt);
+	} else {
+		if (lsn > e->xm->lsn)
+			e->xm->lsn = lsn;
+	}
 
 	struct txv *v, *tmp;
 	struct vy_quota *quota = &e->quota;
