@@ -1697,6 +1697,13 @@ end:
 	return rc;
 }
 
+void
+box_gc(int64_t lsn)
+{
+	engine_gc(lsn);
+	recovery_gc(recovery, lsn);
+}
+
 const char *
 box_status(void)
 {

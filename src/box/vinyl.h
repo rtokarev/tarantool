@@ -84,6 +84,9 @@ vy_checkpoint(struct vy_env *env);
 int
 vy_wait_checkpoint(struct vy_env *env, struct vclock *vlock);
 
+void
+vy_collect_garbage(struct vy_env *env, int64_t lsn);
+
 /*
  * Introspection
  */

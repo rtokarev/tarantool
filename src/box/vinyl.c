@@ -5077,8 +5077,13 @@ vy_wait_checkpoint(struct vy_env *env, struct vclock *vclock)
 	if (vy_log_rotate(env->log, vclock_sum(vclock)) != 0)
 		return -1;
 
-	vy_log_collect_garbage(env->log, vclock_sum(vclock));
 	return 0;
+}
+
+void
+vy_collect_garbage(struct vy_env *env, int64_t lsn)
+{
+	vy_log_collect_garbage(env->log, lsn);
 }
 
 /* Scheduler }}} */

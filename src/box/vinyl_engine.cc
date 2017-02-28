@@ -327,3 +327,9 @@ VinylEngine::waitCheckpoint(struct vclock* vclock)
 {
 	return vy_wait_checkpoint(env, vclock);
 }
+
+void
+VinylEngine::collectGarbage(int64_t lsn)
+{
+	vy_collect_garbage(env, lsn);
+}

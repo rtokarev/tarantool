@@ -133,6 +133,12 @@ Engine::abortCheckpoint()
 }
 
 void
+Engine::collectGarbage(int64_t lsn)
+{
+	(void) lsn;
+}
+
+void
 Engine::join(struct xstream *stream)
 {
 	(void) stream;
@@ -333,6 +339,14 @@ engine_abort_checkpoint()
 	/* rollback snapshot creation */
 	engine_foreach(engine)
 		engine->abortCheckpoint();
+}
+
+void
+engine_gc(int64_t lsn)
+{
+	Engine *engine;
+	engine_foreach(engine)
+		engine->collectGarbage(lsn);
 }
 
 void

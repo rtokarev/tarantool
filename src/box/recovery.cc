@@ -38,6 +38,7 @@
 #include "wal.h" /* wal_watcher */
 #include "replication.h"
 #include "session.h"
+#include "coeio_file.h"
 
 /*
  * Recovery subsystem
@@ -579,3 +580,25 @@ recovery_stop_local(struct recovery *r)
 
 /* }}} */
 
+/* {{{ Garbage collection */
+
+void
+recovery_gc(struct recovery *r, int64_t lsn)
+{
+	if (xdir_scan(&r->wal_dir) != 0) {
+		say_error("can't read wal_dir: %s",
+			  diag_last_error(diag_get())->errmsg);
+		return;
+	}
+	for (struct vclock *it = vclockset_first(&r->wal_dir.index);
+	     it != NULL && vclock_sum(it) < lsn;
+	     it = vclockset_next(&r->wal_dir.index, it)) {
+		char *filename = xdir_format_filename(&r->wal_dir,
+						      vclock_sum(it), NONE);
+		say_info("removing old xlog %s", filename);
+		if (coeio_unlink(filename) < 0 && errno != ENOENT)
+			say_syserror("error while removing %s", filename);
+	}
+}
+
+/* }}} */

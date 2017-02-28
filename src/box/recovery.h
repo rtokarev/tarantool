@@ -117,4 +117,8 @@ void
 recover_remaining_wals(struct recovery *r, struct xstream *stream,
 		       struct vclock *stop_vclock);
 
+/** Remove xlogs older than @lsn. */
+void
+recovery_gc(struct recovery *r, int64_t lsn);
+
 #endif /* TARANTOOL_RECOVERY_H_INCLUDED */

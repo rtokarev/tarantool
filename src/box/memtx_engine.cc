@@ -839,6 +839,23 @@ MemtxEngine::abortCheckpoint()
 	m_checkpoint = 0;
 }
 
+void
+MemtxEngine::collectGarbage(int64_t lsn)
+{
+	struct vclock *it = vclockset_first(&m_snap_dir.index);
+	while (it != NULL && vclock_sum(it) < lsn) {
+		struct vclock *next = vclockset_next(&m_snap_dir.index, it);
+		char *filename = xdir_format_filename(&m_snap_dir,
+						      vclock_sum(it), NONE);
+		say_info("removing old snapshot %s", filename);
+		if (coeio_unlink(filename) < 0 && errno != ENOENT)
+			say_syserror("error while removing %s", filename);
+		else
+			vclockset_remove(&m_snap_dir.index, it);
+		it = next;
+	}
+}
+
 /** Used to pass arguments to memtx_initial_join_f */
 struct memtx_join_arg {
 	const char *snap_dirname;
