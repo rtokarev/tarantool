@@ -340,6 +340,31 @@ wal_thread_stop()
 	rmean_tx_wal_bus = NULL;
 }
 
+struct wal_thread_msg: public cbus_call_msg
+{
+	int (*func)(va_list);
+	va_list ap;
+};
+
+static int
+wal_thread_call_f(struct cbus_call_msg *data)
+{
+	struct wal_thread_msg *msg = (struct wal_thread_msg *) data;
+	return msg->func(msg->ap);
+}
+
+int
+wal_thread_call(int (*func)(va_list), ...)
+{
+	struct wal_thread_msg msg;
+	msg.func = func;
+	va_start(msg.ap, func);
+	int rc = cbus_call(&wal_thread.wal_pipe, &wal_thread.tx_pipe, &msg,
+			   wal_thread_call_f, NULL, TIMEOUT_INFINITY);
+	va_end(msg.ap);
+	return rc;
+}
+
 struct wal_checkpoint: public cmsg
 {
 	struct vclock *vclock;

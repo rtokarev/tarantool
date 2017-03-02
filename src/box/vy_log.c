@@ -46,14 +46,15 @@
 
 #include "assoc.h"
 #include "coeio.h"
-#include "coeio_file.h"
 #include "diag.h"
 #include "errcode.h"
 #include "fiber.h"
 #include "iproto_constants.h" /* IPROTO_INSERT */
 #include "latch.h"
 #include "say.h"
+#include "trigger.h"
 #include "trivia/util.h"
+#include "wal.h"
 #include "xlog.h"
 #include "xrow.h"
 
@@ -153,6 +154,11 @@ struct vy_log {
 	 * xlog object doesn't support concurrent accesses.
 	 */
 	struct latch latch;
+	/**
+	 * Trigger invoked by the WAL thread on shutdown.
+	 * Closes the xlog.
+	 */
+	struct trigger on_shutdown;
 	/** Next ID to use for a range. Used by vy_log_next_range_id(). */
 	int64_t next_range_id;
 	/** Next ID to use for a run. Used by vy_log_next_run_id(). */
@@ -248,6 +254,12 @@ struct vy_run_recovery_info {
 	/** True if the run was deleted. */
 	bool is_deleted;
 };
+
+
+static int
+vy_log_open_or_create(struct vy_log *log);
+static void
+vy_log_close(struct vy_log *log);
 
 static struct vy_recovery *
 vy_recovery_new(const char *dir, int64_t signature);
@@ -578,6 +590,15 @@ fail:
 	return -1;
 }
 
+static void
+vy_log_on_shutdown_f(struct trigger *trigger, void *event)
+{
+	(void)event;
+	struct vy_log *log = trigger->data;
+	if (log->xlog != NULL)
+		vy_log_close(log);
+}
+
 struct vy_log *
 vy_log_new(const char *dir, vy_log_gc_cb gc_cb, void *gc_arg)
 {
@@ -595,6 +616,8 @@ vy_log_new(const char *dir, vy_log_gc_cb gc_cb, void *gc_arg)
 	}
 
 	latch_create(&log->latch);
+	trigger_create(&log->on_shutdown, vy_log_on_shutdown_f, log, NULL);
+	wal_thread_on_shutdown(&log->on_shutdown);
 
 	log->gc_cb = gc_cb;
 	log->gc_arg = gc_arg;
@@ -607,26 +630,35 @@ fail:
 	return NULL;
 }
 
-static ssize_t
+static int
 vy_log_flush_f(va_list ap)
 {
 	struct vy_log *log = va_arg(ap, struct vy_log *);
-	bool *need_rollback = va_arg(ap, bool *);
 
-	/*
-	 * xlog_tx_rollback() must not be called after
-	 * xlog_tx_commit(), even if the latter failed.
-	 */
-	*need_rollback = false;
+	/* Open the xlog on the first write. */
+	if (log->xlog == NULL &&
+	    vy_log_open_or_create(log) < 0)
+		return -1;
+
+	/* Encode buffered records. */
+	xlog_tx_begin(log->xlog);
+	for (int i = 0; i < log->tx_end; i++) {
+		struct xrow_header row;
+		if (vy_log_record_encode(&log->tx_buf[i], &row) < 0 ||
+		    xlog_write_row(log->xlog, &row) < 0) {
+			xlog_tx_rollback(log->xlog);
+			return -1;
+		}
+	}
 
 	if (xlog_tx_commit(log->xlog) < 0 ||
 	    xlog_flush(log->xlog) < 0)
 		return -1;
+
+	/* Success. Reset the buffer. */
+	log->tx_end = 0;
 	return 0;
 }
-
-static int
-vy_log_open_or_create(struct vy_log *log);
 
 /**
  * Try to flush the log buffer to disk.
@@ -641,44 +673,11 @@ vy_log_flush(struct vy_log *log)
 	if (log->tx_end == 0)
 		return 0; /* nothing to do */
 
-	/* Open the xlog on the first write. */
-	if (log->xlog == NULL &&
-	    vy_log_open_or_create(log) < 0)
-		return -1;
-
 	/*
-	 * Encode buffered records.
-	 *
-	 * Ideally, we'd do it from a coeio task, but this is
-	 * impossible as an xlog's buffer cannot be written to
-	 * from multiple threads due to debug checks in the
-	 * slab allocator.
-	 */
-	xlog_tx_begin(log->xlog);
-	for (int i = 0; i < log->tx_end; i++) {
-		struct xrow_header row;
-		if (vy_log_record_encode(&log->tx_buf[i], &row) < 0 ||
-		    xlog_write_row(log->xlog, &row) < 0) {
-			xlog_tx_rollback(log->xlog);
-			return -1;
-		}
-	}
-	/*
-	 * Do actual disk writes in a background fiber
+	 * Do actual disk writes from the wal thread
 	 * so as not to block the tx thread.
 	 */
-	bool need_rollback = true;
-	if (coio_call(vy_log_flush_f, log, &need_rollback) < 0) {
-		if (need_rollback) {
-			/* coio_call() failed due to OOM. */
-			xlog_tx_rollback(log->xlog);
-		}
-		return -1;
-	}
-
-	/* Success. Reset the buffer. */
-	log->tx_end = 0;
-	return 0;
+	return wal_thread_call(vy_log_flush_f, log);
 }
 
 /**
@@ -729,15 +728,21 @@ fail:
 	return -1;
 }
 
+static void
+vy_log_close(struct vy_log *log)
+{
+	assert(log->xlog != NULL);
+	xlog_close(log->xlog, false);
+	free(log->xlog);
+	log->xlog = NULL;
+}
+
 void
 vy_log_delete(struct vy_log *log)
 {
-	if (log->xlog != NULL) {
-		xlog_close(log->xlog, false);
-		free(log->xlog);
-	}
 	if (log->recovery != NULL)
 		vy_recovery_delete(log->recovery);
+	trigger_clear(&log->on_shutdown);
 	latch_destroy(&log->latch);
 	free(log->dir);
 	TRASH(log);
@@ -771,19 +776,14 @@ vy_log_gc(struct vy_log *log, const struct vy_log_record *record)
 			.type = VY_LOG_FORGET_RUN,
 			.run_id = record->run_id,
 		};
-		if (log->xlog == NULL &&
-		    vy_log_open_or_create(log) < 0)
-			goto err;
-		struct xrow_header row;
-		if (vy_log_record_encode(&gc_record, &row) < 0 ||
-		    xlog_write_row(log->xlog, &row) < 0)
-			goto err;
+		vy_log_tx_begin(log);
+		vy_log_write(log, &gc_record);
+		if (vy_log_tx_commit(log) < 0) {
+			say_warn("failed to log run %lld cleanup: %s",
+				 (long long)record->run_id,
+				 diag_last_error(diag_get())->errmsg);
+		}
 	}
-	return;
-err:
-	say_warn("failed to log run %lld cleanup: %s",
-		 (long long)record->run_id,
-		 diag_last_error(diag_get())->errmsg);
 }
 
 int
@@ -914,6 +914,7 @@ vy_log_rotate_f(va_list ap)
 {
 	struct vy_log *log = va_arg(ap, struct vy_log *);
 	int64_t signature = va_arg(ap, int64_t);
+	struct vy_recovery **p_recovery = va_arg(ap, struct vy_recovery **);
 
 	struct vy_recovery *recovery = vy_recovery_new(log->dir, log->signature);
 	if (recovery == NULL)
@@ -937,16 +938,8 @@ vy_log_rotate_f(va_list ap)
 	    xlog_sync(&arg.xlog) < 0 ||
 	    xlog_rename(&arg.xlog) < 0)
 		goto err_write_xlog;
-
-	/* Cleanup unused runs. */
-	struct xlog *old_xlog = log->xlog;
-	log->xlog = &arg.xlog;
-	vy_recovery_iterate(recovery, vy_log_gc_deleted_cb_func, log);
-	log->xlog = old_xlog;
-	xlog_flush(&arg.xlog);
-	xlog_close(&arg.xlog, false);
 out:
-	vy_recovery_delete(recovery);
+	*p_recovery = recovery;
 	return 0;
 
 err_write_xlog:
@@ -960,6 +953,14 @@ err_write_xlog:
 	vy_recovery_delete(recovery);
 err_recovery:
 	return -1;
+}
+
+static int
+vy_log_close_f(va_list ap)
+{
+	struct vy_log *log = va_arg(ap, struct vy_log *);
+	vy_log_close(log);
+	return 0;
 }
 
 int
@@ -997,7 +998,8 @@ vy_log_rotate(struct vy_log *log, int64_t signature)
 		goto fail;
 
 	/* Do actual work from coeio so as not to stall tx thread. */
-	if (coio_call(vy_log_rotate_f, log, signature) < 0)
+	struct vy_recovery *recovery;
+	if (coio_call(vy_log_rotate_f, log, signature, &recovery) < 0)
 		goto fail;
 
 	/*
@@ -1005,13 +1007,17 @@ vy_log_rotate(struct vy_log *log, int64_t signature)
 	 * automatically on the first write (see vy_log_flush()).
 	 */
 	if (log->xlog != NULL) {
-		xlog_close(log->xlog, false);
-		free(log->xlog);
+		wal_thread_call(vy_log_close_f, log);
 		log->xlog = NULL;
 	}
 	log->signature = signature;
 
 	latch_unlock(&log->latch);
+
+	/* Cleanup unused runs. */
+	vy_recovery_iterate(recovery, vy_log_gc_deleted_cb_func, log);
+	vy_recovery_delete(recovery);
+
 	say_debug("%s: complete", __func__);
 	return 0;
 
