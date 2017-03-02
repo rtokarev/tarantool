@@ -39,6 +39,7 @@
 #include "xrow.h"
 #include "cbus.h"
 #include "coeio.h"
+#include "trigger.h"
 
 const char *wal_mode_STRS[] = { "none", "write", "fsync", NULL };
 
@@ -52,6 +53,8 @@ struct wal_thread {
 	struct cpipe wal_pipe;
 	/** Return pipe from 'wal' to tx' */
 	struct cpipe tx_pipe;
+	/** Triggers invoked by 'wal' thread on shutdown. */
+	struct rlist on_shutdown;
 };
 
 /*
@@ -109,6 +112,11 @@ struct wal_writer
 	struct rlist watchers;
 	/** The lock protecting the watchers list. */
 	pthread_mutex_t watchers_mutex;
+	/**
+	 * Trigger invoked by the WAL thread on shutdown.
+	 * Closes the WAL and destroys the WAL writer structure.
+	 */
+	struct trigger on_shutdown;
 };
 
 struct wal_msg: public cmsg {
@@ -212,6 +220,9 @@ tx_schedule_rollback(struct cmsg *msg)
 	stailq_create(&writer->rollback);
 }
 
+static void
+wal_writer_on_shutdown_f(struct trigger *trigger, void *event);
+
 /**
  * Initialize WAL writer context. Even though it's a singleton,
  * encapsulate the details just in case we may use
@@ -239,14 +250,30 @@ wal_writer_create(struct wal_writer *writer, enum wal_mode wal_mode,
 
 	tt_pthread_mutex_init(&writer->watchers_mutex, NULL);
 	rlist_create(&writer->watchers);
+
+	trigger_create(&writer->on_shutdown,
+		       wal_writer_on_shutdown_f, writer, NULL);
 }
 
 /** Destroy a WAL writer structure. */
 static void
 wal_writer_destroy(struct wal_writer *writer)
 {
+	trigger_clear(&writer->on_shutdown);
 	xdir_destroy(&writer->wal_dir);
 	tt_pthread_mutex_destroy(&writer->watchers_mutex);
+}
+
+static void
+wal_writer_on_shutdown_f(struct trigger *trigger, void *event)
+{
+	(void) event;
+	struct wal_writer *writer = (struct wal_writer *) trigger->data;
+	if (writer->is_active) {
+		xlog_close(&writer->current_wal, false);
+		writer->is_active = false;
+	}
+	wal_writer_destroy(writer);
 }
 
 /** WAL thread routine. */
@@ -257,12 +284,20 @@ wal_thread_f(va_list ap);
 void
 wal_thread_start()
 {
+	rlist_create(&wal_thread.on_shutdown);
+
 	if (cord_costart(&wal_thread.cord, "wal", wal_thread_f, NULL) != 0)
 		panic("failed to start WAL thread");
 
 	/* Create a pipe to WAL thread. */
 	cpipe_create(&wal_thread.wal_pipe, "wal");
 	cpipe_set_max_input(&wal_thread.wal_pipe, IOV_MAX);
+}
+
+void
+wal_thread_on_shutdown(struct trigger *trigger)
+{
+	trigger_add(&wal_thread.on_shutdown, trigger);
 }
 
 /**
@@ -283,6 +318,7 @@ wal_init(enum wal_mode wal_mode, const char *wal_dirname,
 
 	wal_writer_create(writer, wal_mode, wal_dirname, instance_uuid,
 			  vclock, rows_per_wal);
+	wal_thread_on_shutdown(&writer->on_shutdown);
 
 	wal = writer;
 }
@@ -299,11 +335,6 @@ wal_thread_stop()
 	if (cord_join(&wal_thread.cord)) {
 		/* We can't recover from this in any reasonable way. */
 		panic_syserror("WAL writer: thread join failed");
-	}
-
-	if (wal != NULL) {
-		wal_writer_destroy(wal);
-		wal = NULL;
 	}
 
 	rmean_tx_wal_bus = NULL;
@@ -593,10 +624,7 @@ wal_thread_f(va_list ap)
 
 	cbus_loop(&endpoint);
 
-	if (wal != NULL && wal->is_active) {
-		xlog_close(&wal->current_wal, false);
-		wal->is_active = false;
-	}
+	trigger_run(&wal_thread.on_shutdown, NULL);
 	return 0;
 }
 
