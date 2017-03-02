@@ -30,6 +30,7 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include <stdarg.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include "small/rlist.h"
@@ -120,6 +121,12 @@ wal_checkpoint(struct vclock *vclock, bool rotate);
  */
 void
 wal_thread_on_shutdown(struct trigger *trigger);
+
+/**
+ * Call a function on behalf of the WAL thread.
+ */
+int
+wal_thread_call(int (*func)(va_list), ...);
 
 #if defined(__cplusplus)
 } /* extern "C" */

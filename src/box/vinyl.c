@@ -1462,7 +1462,7 @@ vy_run_unlink_files(const char *dir, int64_t run_id)
 	char path[PATH_MAX];
 	for (int type = 0; type < vy_file_MAX; type++) {
 		vy_run_snprint_path(path, PATH_MAX, dir, run_id, type);
-		if (unlink(path) < 0 && errno != ENOENT) {
+		if (coeio_unlink(path) < 0 && errno != ENOENT) {
 			say_syserror("failed to delete file '%s'", path);
 			rc = -1;
 		}
