@@ -36,6 +36,8 @@
 #include "salad/stailq.h"
 
 struct fiber;
+struct trigger;
+struct vclock;
 struct wal_writer;
 
 enum wal_mode { WAL_NONE = 0, WAL_WRITE, WAL_FSYNC, WAL_MODE_MAX };
@@ -112,6 +114,12 @@ extern "C" {
  */
 void
 wal_checkpoint(struct vclock *vclock, bool rotate);
+
+/**
+ * Register a trigger to invoke from the WAL thread on shutdown.
+ */
+void
+wal_thread_on_shutdown(struct trigger *trigger);
 
 #if defined(__cplusplus)
 } /* extern "C" */
