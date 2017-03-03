@@ -125,10 +125,32 @@ mp_compare_number(const char *field_a, const char *field_b)
 	if (a_type == MP_FLOAT || a_type == MP_DOUBLE ||
 	    b_type == MP_FLOAT || b_type == MP_DOUBLE) {
 		double a_val, b_val;
-		if (mp_read_double(&field_a, &a_val) != 0 ||
-		    mp_read_double(&field_b, &b_val) != 0)
-			unreachable();
-		return COMPARE_RESULT(a_val, b_val);
+		const char *field_a_tmp = field_a;
+		const char *field_b_tmp = field_b;
+		bool lossless_a = mp_read_double(&field_a_tmp, &a_val) == 0;
+		bool lossless_b = mp_read_double(&field_b_tmp, &b_val) == 0;
+		bool lossless = lossless_a && lossless_b;
+		int rc = COMPARE_RESULT(a_val, b_val);
+		if (rc || lossless)
+			return rc;
+		if (a_type == MP_UINT) {
+			assert(b_type == MP_FLOAT || b_type == MP_DOUBLE);
+			uint64_t a_val = mp_decode_uint(&field_a);
+			return COMPARE_RESULT(a_val, (uint64_t)b_val);
+		} else if (a_type == MP_INT) {
+			assert(b_type == MP_FLOAT || b_type == MP_DOUBLE);
+			int64_t a_val = mp_decode_int(&field_a);
+			return COMPARE_RESULT(a_val, (int64_t)b_val);
+		} else if (b_type == MP_UINT) {
+			assert(a_type == MP_FLOAT || a_type == MP_DOUBLE);
+			uint64_t b_val = mp_decode_uint(&field_b);
+			return COMPARE_RESULT((uint64_t)a_val, b_val);
+		} else {
+			assert(b_type == MP_INT);
+			assert(a_type == MP_FLOAT || a_type == MP_DOUBLE);
+			int64_t b_val = mp_decode_int(&field_b);
+			return COMPARE_RESULT((int64_t)a_val, b_val);
+		}
 	}
 	return mp_compare_integer(field_a, field_b);
 }
