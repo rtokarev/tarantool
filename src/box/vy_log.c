@@ -41,6 +41,7 @@
 #include <unistd.h>
 
 #include <msgpuck/msgpuck.h>
+#include <small/ibuf.h>
 #include <small/region.h>
 #include <small/rlist.h>
 
@@ -127,12 +128,6 @@ static const char *vy_log_type_name[] = {
 
 struct vy_recovery;
 
-/**
- * Max number of records in the log buffer.
- * This limits the size of a transaction.
- */
-enum { VY_LOG_TX_BUF_SIZE = 64 };
-
 /** Vinyl metadata log object. */
 struct vy_log {
 	/** Xlog object used for writing the log. */
@@ -164,17 +159,18 @@ struct vy_log {
 	/** Next ID to use for a run. Used by vy_log_next_run_id(). */
 	int64_t next_run_id;
 	/**
-	 * Index of the first record of the current
+	 * Offset of the first record of the current
 	 * transaction in tx_buf.
 	 */
-	int tx_begin;
+	size_t tx_begin;
 	/**
-	 * Index of the record following the last one
-	 * of the current transaction in tx_buf.
+	 * If set, the current transaction must be aborted on commit.
+	 * This flag is set if vy_log_write() failed to allocate space
+	 * for a new record in tx_buf.
 	 */
-	int tx_end;
+	bool tx_failed;
 	/** Records awaiting to be written to disk. */
-	struct vy_log_record tx_buf[VY_LOG_TX_BUF_SIZE];
+	struct ibuf tx_buf;
 };
 
 /** Recovery context. */
@@ -616,6 +612,8 @@ vy_log_new(const char *dir, vy_log_gc_cb gc_cb, void *gc_arg)
 	}
 
 	latch_create(&log->latch);
+	ibuf_create(&log->tx_buf, &cord()->slabc,
+		    sizeof(struct vy_log_record) * 64);
 	trigger_create(&log->on_shutdown, vy_log_on_shutdown_f, log, NULL);
 	wal_thread_on_shutdown(&log->on_shutdown);
 
@@ -642,9 +640,10 @@ vy_log_flush_f(va_list ap)
 
 	/* Encode buffered records. */
 	xlog_tx_begin(log->xlog);
-	for (int i = 0; i < log->tx_end; i++) {
+	for (struct vy_log_record *record = (void *)log->tx_buf.rpos;
+	     record != (void *)log->tx_buf.wpos; record++) {
 		struct xrow_header row;
-		if (vy_log_record_encode(&log->tx_buf[i], &row) < 0 ||
+		if (vy_log_record_encode(record, &row) < 0 ||
 		    xlog_write_row(log->xlog, &row) < 0) {
 			xlog_tx_rollback(log->xlog);
 			return -1;
@@ -656,7 +655,7 @@ vy_log_flush_f(va_list ap)
 		return -1;
 
 	/* Success. Reset the buffer. */
-	log->tx_end = 0;
+	ibuf_reset(&log->tx_buf);
 	return 0;
 }
 
@@ -670,7 +669,7 @@ vy_log_flush_f(va_list ap)
 static int
 vy_log_flush(struct vy_log *log)
 {
-	if (log->tx_end == 0)
+	if (ibuf_used(&log->tx_buf) == 0)
 		return 0; /* nothing to do */
 
 	/*
@@ -744,6 +743,7 @@ vy_log_delete(struct vy_log *log)
 		vy_recovery_delete(log->recovery);
 	trigger_clear(&log->on_shutdown);
 	latch_destroy(&log->latch);
+	ibuf_destroy(&log->tx_buf);
 	free(log->dir);
 	TRASH(log);
 	free(log);
@@ -1031,7 +1031,8 @@ void
 vy_log_tx_begin(struct vy_log *log)
 {
 	latch_lock(&log->latch);
-	log->tx_begin = log->tx_end;
+	log->tx_failed = false;
+	log->tx_begin = ibuf_used(&log->tx_buf);
 	say_debug("%s", __func__);
 }
 
@@ -1047,6 +1048,18 @@ vy_log_tx_do_commit(struct vy_log *log, bool no_discard)
 {
 	int rc = 0;
 
+	if (log->tx_failed) {
+		/*
+		 * vy_log_write() failed to allocate memory.
+		 * @no_discard transactions can't tolerate this.
+		 */
+		if (no_discard)
+			panic("failed to grow vinyl metadata log buffer");
+		diag_set(OutOfMemory, sizeof(struct vy_log_record),
+			 "ibuf", "struct vy_log_record");
+		goto fail;
+	}
+
 	assert(latch_owner(&log->latch) == fiber());
 	/*
 	 * During recovery, we may replay records we failed to commit
@@ -1057,18 +1070,22 @@ vy_log_tx_do_commit(struct vy_log *log, bool no_discard)
 	if (log->recovery != NULL)
 		goto out;
 
-	rc = vy_log_flush(log);
-	/*
-	 * Rollback the transaction on failure unless
-	 * we were explicitly told not to.
-	 */
-	if (rc != 0 && !no_discard)
-		log->tx_end = log->tx_begin;
+	if (vy_log_flush(log) < 0)
+		goto fail;
 out:
 	say_debug("%s(no_discard=%d): %s", __func__, no_discard,
 		  rc == 0 ? "success" : "fail");
 	latch_unlock(&log->latch);
 	return rc;
+fail:
+	/*
+	 * Rollback the transaction on failure unless
+	 * we were explicitly told not to.
+	 */
+	if (!no_discard)
+		log->tx_buf.wpos = log->tx_buf.rpos + log->tx_begin;
+	rc = -1;
+	goto out;
 }
 
 int
@@ -1089,12 +1106,17 @@ vy_log_write(struct vy_log *log, const struct vy_log_record *record)
 	assert(latch_owner(&log->latch) == fiber());
 
 	say_debug("%s: %s", __func__, vy_log_record_str(record));
-	if (log->tx_end >= VY_LOG_TX_BUF_SIZE) {
-		latch_unlock(&log->latch);
-		panic("vinyl metadata log buffer overflow");
-	}
 
-	log->tx_buf[log->tx_end++] = *record;
+	if (log->tx_failed)
+		return;
+
+	struct vy_log_record *tx_record = ibuf_alloc(&log->tx_buf,
+						     sizeof(*tx_record));
+	if (tx_record == NULL) {
+		log->tx_failed = true;
+		return;
+	}
+	*tx_record = *record;
 }
 
 /** Lookup an index in vy_recovery::index_hash map. */
