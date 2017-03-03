@@ -534,6 +534,29 @@ local function upgrade_to_1_7_2()
 end
 
 --------------------------------------------------------------------------------
+-- Tarantool 1.8.1
+--------------------------------------------------------------------------------
+
+local function upgrade_to_1_8_1()
+    if VERSION_ID >= version_id(1, 8, 1) then
+        return
+    end
+    local _space = box.space._space
+    local _index = box.space._index
+    local id = box.schema.TRANSACTION_ID
+    _space:insert{id, ADMIN, '_transaction', 'memtx', 0, setmap({}), {}}
+    _index:insert{id, 0, 'primary', 'tree', {unique = true}, {{0, 'unsigned'}}}
+    local format = {}
+    format[1] = {name='id', type='unsigned'}
+    format[2] = {name='coordinator_id', type='unsigned'}
+    format[3] = {name='state', type='str'}
+    box.space._transaction:format(format)
+
+    log.info("set schema version to 1.8.1")
+    box.space._schema:replace({'version', 1, 8, 1})
+end
+
+--------------------------------------------------------------------------------
 
 local function upgrade()
     box.cfg{}
@@ -549,6 +572,7 @@ local function upgrade()
     upgrade_to_1_6_8()
     upgrade_to_1_7_1()
     upgrade_to_1_7_2()
+    upgrade_to_1_8_1()
 end
 
 local function bootstrap()

@@ -613,6 +613,8 @@ box.space._space:select()
         'type': 'num'}, {'name': 'privilege', 'type': 'num'}]]
   - [320, 1, '_cluster', 'memtx', 0, {}, [{'name': 'id', 'type': 'num'}, {'name': 'uuid',
         'type': 'str'}]]
+  - [328, 1, '_transaction', 'memtx', 0, {}, [{'name': 'id', 'type': 'unsigned'},
+      {'name': 'coordinator_id', 'type': 'unsigned'}, {'name': 'state', 'type': 'str'}]]
 ...
 box.space._func:select()
 ---

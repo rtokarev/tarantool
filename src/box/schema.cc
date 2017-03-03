@@ -297,6 +297,20 @@ schema_init()
 	key_def->space_id = def.id = BOX_CLUSTER_ID;
 	snprintf(def.name, sizeof(def.name), "_cluster");
 	(void) sc_space_new(&def, key_def, &on_replace_cluster);
+
+	/*
+	 * _transaction - information about opened two phase
+	 * transactions: their own identifiers, identifiers of
+	 * their coordinators and state ('commit', 'rollback',
+	 * 'prepare'). The state has been changed before the
+	 * action starts. That is, before commit/rollback/prepare
+	 * we write the state in this space.
+	 * The record has been deleted from _transaction after
+	 * commit/rollback is done.
+	 */
+	key_def->space_id = def.id = BOX_TRANSACTION_ID;
+	snprintf(def.name, sizeof(def.name), "_transaction");
+	(void) sc_space_new(&def, key_def, NULL);
 	key_def_delete(key_def);
 
 	/* _index - definition of indexes in all spaces */
