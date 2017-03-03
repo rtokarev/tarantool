@@ -100,6 +100,7 @@ enum vy_status {
 	VINYL_FINAL_RECOVERY_LOCAL,
 	VINYL_FINAL_RECOVERY_REMOTE,
 	VINYL_ONLINE,
+	VINYL_SHUTDOWN,
 };
 
 /**
@@ -537,6 +538,24 @@ struct txv {
 
 typedef rb_tree(struct txv) read_set_t;
 
+/** State of a vinyl index. */
+enum vy_index_state {
+	/**
+	 * The index is in use.
+	 */
+	VY_INDEX_ACTIVE,
+	/**
+	 * The index was dropped, but the drop operation hasn't
+	 * been logged to the metadata log yet.
+	 */
+	VY_INDEX_DROPPED_UNLOGGED,
+	/**
+	 * The index was dropped, and the drop operation has
+	 * already been logged to the metadata log.
+	 */
+	VY_INDEX_DROPPED_LOGGED,
+};
+
 /**
  * A struct for primary and secondary Vinyl indexes.
  *
@@ -614,12 +633,8 @@ struct vy_index {
 	char *name;
 	/** The path with index files. */
 	char *path;
-	/**
-	 * This flag is set if the index was dropped.
-	 * It is also set on local recovery if the index
-	 * will be dropped when WAL is replayed.
-	 */
-	bool is_dropped;
+	/** State of the index. */
+	enum vy_index_state state;
 	/**
 	 * A key definition for this index, used to
 	 * compare tuples.
@@ -3431,7 +3446,7 @@ vy_index_recovery_cb(const struct vy_log_record *record, void *cb_arg)
 		assert(record->index_id == index->key_def->opts.lsn);
 		break;
 	case VY_LOG_DROP_INDEX:
-		index->is_dropped = true;
+		index->state = VY_INDEX_DROPPED_LOGGED;
 		break;
 	case VY_LOG_INSERT_RANGE:
 		range = vy_range_new(index, record->range_id,
@@ -3647,7 +3662,7 @@ vy_stmt_is_committed(struct vy_index *index, const struct tuple *stmt)
 	 * If the index is going to be dropped on WAL recovery,
 	 * there's no point in inserting statements into it.
 	 */
-	if (index->is_dropped)
+	if (index->state != VY_INDEX_ACTIVE)
 		return true;
 
 	struct vy_range *range;
@@ -3745,11 +3760,8 @@ struct vy_task_ops {
 	 * This function is called by the scheduler if either ->execute
 	 * or ->complete failed. It may be used to undo changes done to
 	 * the index when preparing the task.
-	 *
-	 * If @in_shutdown is set, the callback is invoked from the
-	 * engine destructor.
 	 */
-	void (*abort)(struct vy_task *task, bool in_shutdown);
+	void (*abort)(struct vy_task *task);
 };
 
 struct vy_task {
@@ -3905,7 +3917,7 @@ vy_task_dump_complete(struct vy_task *task)
 }
 
 static void
-vy_task_dump_abort(struct vy_task *task, bool in_shutdown)
+vy_task_dump_abort(struct vy_task *task)
 {
 	struct vy_index *index = task->index;
 	struct vy_range *range = task->range;
@@ -3916,7 +3928,7 @@ vy_task_dump_abort(struct vy_task *task, bool in_shutdown)
 	/* The iterator has been cleaned up in a worker thread. */
 	vy_write_iterator_delete(task->wi);
 
-	if (!in_shutdown)
+	if (index->env->status != VINYL_SHUTDOWN)
 		vy_range_discard_new_run(range);
 
 	/*
@@ -4087,7 +4099,7 @@ vy_task_split_complete(struct vy_task *task)
 }
 
 static void
-vy_task_split_abort(struct vy_task *task, bool in_shutdown)
+vy_task_split_abort(struct vy_task *task)
 {
 	struct vy_index *index = task->index;
 	struct vy_range *range = task->range;
@@ -4099,7 +4111,7 @@ vy_task_split_abort(struct vy_task *task, bool in_shutdown)
 	/* The iterator has been cleaned up in a worker thread. */
 	vy_write_iterator_delete(task->wi);
 
-	if (!in_shutdown) {
+	if (index->env->status != VINYL_SHUTDOWN) {
 		rlist_foreach_entry(r, &range->split_list, split_list)
 			vy_range_discard_new_run(r);
 	}
@@ -4326,7 +4338,7 @@ vy_task_compact_complete(struct vy_task *task)
 }
 
 static void
-vy_task_compact_abort(struct vy_task *task, bool in_shutdown)
+vy_task_compact_abort(struct vy_task *task)
 {
 	struct vy_index *index = task->index;
 	struct vy_range *range = task->range;
@@ -4337,7 +4349,7 @@ vy_task_compact_abort(struct vy_task *task, bool in_shutdown)
 	/* The iterator has been cleaned up in worker. */
 	vy_write_iterator_delete(task->wi);
 
-	if (!in_shutdown)
+	if (index->env->status != VINYL_SHUTDOWN)
 		vy_range_discard_new_run(range);
 
 	/*
@@ -4752,7 +4764,7 @@ fail:
 	error_log(diag_last_error(diag));
 	diag_move(diag, &scheduler->diag);
 	if (task->ops->abort)
-		task->ops->abort(task, false);
+		task->ops->abort(task);
 	return -1;
 }
 
@@ -4967,7 +4979,7 @@ vy_scheduler_stop_workers(struct vy_scheduler *scheduler)
 	stailq_concat(&task_queue, &scheduler->output_queue);
 	stailq_foreach_entry_safe(task, next, &task_queue, link) {
 		if (task->ops->abort != NULL)
-			task->ops->abort(task, true);
+			task->ops->abort(task);
 		vy_task_delete(&scheduler->task_pool, task);
 	}
 }
@@ -5402,42 +5414,58 @@ static void
 vy_index_unref(struct vy_index *index)
 {
 	assert(index->refs > 0);
-	if (--index->refs == 0)
-		vy_index_delete(index);
+	index->refs--;
+	if (index->refs > 0)
+		return;
+
+	/*
+	 * Only log the index drop operation when the last reference
+	 * is gone, because until then records modifying the index may
+	 * still be written to the metadata log by asynchronous tasks.
+	 * Since we can't abort here, we leave the index drop record
+	 * in the log buffer in case of commit failure so that it is
+	 * flushed along with the next transaction. If it is not
+	 * flushed before the instance is shut down, we replay it on
+	 * local recovery from WAL.
+	 */
+	struct vy_env *env = index->env;
+	if (env->status != VINYL_SHUTDOWN &&
+	    index->state == VY_INDEX_DROPPED_UNLOGGED) {
+		vy_log_tx_begin(env->log);
+		vy_log_drop_index(env->log, index->key_def->opts.lsn);
+		if (vy_log_tx_try_commit(env->log) < 0)
+			say_warn("failed to log drop index: %s",
+				 diag_last_error(diag_get())->errmsg);
+	}
+
+	vy_index_delete(index);
 }
 
 void
 vy_index_drop(struct vy_index *index)
 {
 	struct vy_env *env = index->env;
-	int64_t index_id = index->key_def->opts.lsn;
-	bool was_dropped = index->is_dropped;
 
-	/* TODO:
-	 * don't drop/recreate index in local wal recovery mode if all
-	 * operations are already done.
-	 */
-	index->is_dropped = true;
+	if (index->state == VY_INDEX_ACTIVE) {
+		/*
+		 * Mark the index as dropped. The corresponding record
+		 * will be written to the metadata log when the last
+		 * reference to the index is gone.
+		 */
+		index->state = VY_INDEX_DROPPED_UNLOGGED;
+	} else {
+		/*
+		 * This must be local recovery from WAL and we are
+		 * dealing with the index that has already been marked
+		 * as dropped in the metadata log.
+		 */
+		assert(env->status == VINYL_FINAL_RECOVERY_LOCAL);
+		assert(index->state == VY_INDEX_DROPPED_LOGGED);
+	}
+
 	rlist_del(&index->link);
 	index->space = NULL;
 	vy_index_unref(index);
-
-	/*
-	 * We can't abort here, because the index drop request has
-	 * already been written to WAL. So if we fail to write the
-	 * change to the metadata log, we leave it in the log buffer,
-	 * to be flushed along with the next transaction. If it is
-	 * not flushed before the instance is shut down, we replay it
-	 * on local recovery from WAL.
-	 */
-	if (env->status == VINYL_FINAL_RECOVERY_LOCAL && was_dropped)
-		return;
-
-	vy_log_tx_begin(env->log);
-	vy_log_drop_index(env->log, index_id);
-	if (vy_log_tx_try_commit(env->log) < 0)
-		say_warn("failed to log drop index: %s",
-			 diag_last_error(diag_get())->errmsg);
 }
 
 extern struct tuple_format_vtab vy_tuple_format_vtab;
@@ -5554,6 +5582,7 @@ vy_index_new(struct vy_env *e, struct key_def *user_key_def,
 	read_set_new(&index->read_set);
 	index->space = space;
 	index->user_key_def = user_key_def;
+	index->state = VY_INDEX_ACTIVE;
 
 	return index;
 
@@ -7086,6 +7115,7 @@ error_conf:
 void
 vy_env_delete(struct vy_env *e)
 {
+	e->status = VINYL_SHUTDOWN;
 	struct vy_index *index, *tmp;
 	rlist_foreach_entry_safe(index, &e->indexes, link, tmp)
 		vy_index_unref(index);
