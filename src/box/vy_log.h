@@ -114,6 +114,17 @@ enum vy_log_type {
 	 * the new log on rotation.
 	 */
 	VY_LOG_FORGET_RUN		= 7,
+	/**
+	 * A record of this type is written to the new log on rotation.
+	 * It contains the signature of the rotated log and is needed
+	 * to keep track of old log files.
+	 */
+	VY_LOG_ROTATE			= 8,
+	/**
+	 * A record of this type is written after a log file deletion.
+	 * It contains the signature of the deleted log file.
+	 */
+	VY_LOG_FORGET			= 9,
 
 	vy_log_MAX
 };
@@ -316,6 +327,7 @@ vy_log_create_index(struct vy_log *log, int64_t index_id,
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_CREATE_INDEX,
+		.signature = -1,
 		.index_id = index_id,
 		.iid = iid,
 		.space_id = space_id,
@@ -331,6 +343,7 @@ vy_log_drop_index(struct vy_log *log, int64_t index_id)
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_DROP_INDEX,
+		.signature = -1,
 		.index_id = index_id,
 	};
 	vy_log_write(log, &record);
@@ -343,6 +356,7 @@ vy_log_insert_range(struct vy_log *log, int64_t index_id, int64_t range_id,
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_INSERT_RANGE,
+		.signature = -1,
 		.index_id = index_id,
 		.range_id = range_id,
 		.range_begin = range_begin,
@@ -357,6 +371,7 @@ vy_log_delete_range(struct vy_log *log, int64_t range_id)
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_DELETE_RANGE,
+		.signature = -1,
 		.range_id = range_id,
 	};
 	vy_log_write(log, &record);
@@ -368,6 +383,7 @@ vy_log_prepare_run(struct vy_log *log, int64_t index_id, int64_t run_id)
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_PREPARE_RUN,
+		.signature = -1,
 		.index_id = index_id,
 		.run_id = run_id,
 	};
@@ -380,6 +396,7 @@ vy_log_insert_run(struct vy_log *log, int64_t range_id, int64_t run_id)
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_INSERT_RUN,
+		.signature = -1,
 		.range_id = range_id,
 		.run_id = run_id,
 	};
@@ -392,6 +409,7 @@ vy_log_delete_run(struct vy_log *log, int64_t run_id)
 {
 	struct vy_log_record record = {
 		.type = VY_LOG_DELETE_RUN,
+		.signature = -1,
 		.run_id = run_id,
 	};
 	vy_log_write(log, &record);

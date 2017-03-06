@@ -47,6 +47,7 @@
 
 #include "assoc.h"
 #include "coeio.h"
+#include "coeio_file.h"
 #include "diag.h"
 #include "errcode.h"
 #include "fiber.h"
@@ -100,6 +101,8 @@ static const unsigned long vy_log_key_mask[] = {
 					  (1 << VY_LOG_KEY_RUN_ID),
 	[VY_LOG_DELETE_RUN]		= (1 << VY_LOG_KEY_RUN_ID),
 	[VY_LOG_FORGET_RUN]		= (1 << VY_LOG_KEY_RUN_ID),
+	[VY_LOG_ROTATE]			= 0,
+	[VY_LOG_FORGET]			= 0,
 };
 
 /** vy_log_key -> human readable name. */
@@ -124,6 +127,8 @@ static const char *vy_log_type_name[] = {
 	[VY_LOG_INSERT_RUN]		= "insert_run",
 	[VY_LOG_DELETE_RUN]		= "delete_run",
 	[VY_LOG_FORGET_RUN]		= "forget_run",
+	[VY_LOG_ROTATE]			= "rotate",
+	[VY_LOG_FORGET]			= "forget",
 };
 
 struct vy_recovery;
@@ -175,6 +180,8 @@ struct vy_log {
 
 /** Recovery context. */
 struct vy_recovery {
+	/** Signatures of rotated, but not deleted log files. */
+	struct mh_i64ptr_t *rotated_logs;
 	/** ID -> vy_index_recovery_info. */
 	struct mh_i64ptr_t *index_hash;
 	/** ID -> vy_range_recovery_info. */
@@ -285,6 +292,8 @@ vy_recovery_iterate_index(struct vy_index_recovery_info *index,
 static int
 vy_recovery_iterate(struct vy_recovery *recovery,
 		    vy_recovery_cb cb, void *cb_arg);
+static int
+vy_recovery_rotate_log(struct vy_recovery *recovery, int64_t signature);
 
 /** An snprint-style function to print a path to a vinyl metadata log. */
 static int
@@ -788,7 +797,7 @@ vy_log_next_range_id(struct vy_log *log)
  * next log rotation.
  */
 static void
-vy_log_gc(struct vy_log *log, const struct vy_log_record *record)
+vy_log_gc_run(struct vy_log *log, const struct vy_log_record *record)
 {
 	if (log->gc_cb(record->run_id, record->iid, record->space_id,
 		       record->path, log->gc_arg) == 0) {
@@ -830,11 +839,11 @@ vy_log_begin_recovery(struct vy_log *log, int64_t signature)
  * left from incomplete runs.
  */
 static int
-vy_log_gc_incomplete_cb_func(const struct vy_log_record *record, void *cb_arg)
+vy_log_recovery_gc_cb_func(const struct vy_log_record *record, void *cb_arg)
 {
 	struct vy_log *log = cb_arg;
 	if (record->type == VY_LOG_PREPARE_RUN)
-		vy_log_gc(log, record);
+		vy_log_gc_run(log, record);
 	return 0;
 }
 
@@ -855,7 +864,7 @@ vy_log_end_recovery(struct vy_log *log)
 	 * or not inserted into a range. We need to delete such runs
 	 * on recovery.
 	 */
-	vy_recovery_iterate(log->recovery, vy_log_gc_incomplete_cb_func, log);
+	vy_recovery_iterate(log->recovery, vy_log_recovery_gc_cb_func, log);
 
 	vy_recovery_delete(log->recovery);
 	log->recovery = NULL;
@@ -914,14 +923,39 @@ vy_log_rotate_cb_func(const struct vy_log_record *record, void *cb_arg)
 
 /**
  * Callback passed to vy_recovery_iterate() to remove files
- * left from deleted runs.
+ * left from deleted runs and old log files.
  */
 static int
-vy_log_gc_deleted_cb_func(const struct vy_log_record *record, void *cb_arg)
+vy_log_gc_cb_func(const struct vy_log_record *record, void *cb_arg)
 {
 	struct vy_log *log = cb_arg;
+
+	/* Delete unused runs. */
 	if (record->type == VY_LOG_DELETE_RUN)
-		vy_log_gc(log, record);
+		vy_log_gc_run(log, record);
+
+	/* Delete old logs. */
+	if (record->type == VY_LOG_ROTATE) {
+		char path[PATH_MAX];
+		vy_log_snprint_path(path, sizeof(path), log->dir,
+				    record->signature);
+		if (coeio_unlink(path) == 0) {
+			struct vy_log_record gc_record = {
+				.type = VY_LOG_FORGET,
+				.signature = record->signature,
+			};
+			vy_log_tx_begin(log);
+			vy_log_write(log, &gc_record);
+			if (vy_log_tx_commit(log) < 0) {
+				say_warn("failed to log deletion of "
+					 "metadata log %lld: %s",
+					 (long long)record->signature,
+					 diag_last_error(diag_get())->errmsg);
+			}
+		} else {
+			say_warn("failed to delete file '%s'", path);
+		}
+	}
 	return 0;
 }
 
@@ -940,6 +974,13 @@ vy_log_rotate_f(va_list ap)
 	recovery = vy_recovery_new(log->dir, log->signature, INT64_MAX);
 	if (recovery == NULL)
 		goto err_recovery;
+
+	/*
+	 * Add signature of the log being rotated to the recovery
+	 * context so that it is written to the new log.
+	 */
+	if (vy_recovery_rotate_log(recovery, log->signature) < 0)
+		goto err_rotate;
 
 	char path[PATH_MAX];
 	vy_log_snprint_path(path, sizeof(path), log->dir, signature);
@@ -971,6 +1012,7 @@ err_write_xlog:
 				     arg.xlog.filename);
 		xlog_close(&arg.xlog, false);
 	}
+err_rotate:
 	vy_recovery_delete(recovery);
 err_recovery:
 	return -1;
@@ -1073,7 +1115,7 @@ vy_log_collect_garbage(struct vy_log *log, int64_t signature)
 
 	if (rc == 0) {
 		/* Cleanup unused runs. */
-		vy_recovery_iterate(recovery, vy_log_gc_deleted_cb_func, log);
+		vy_recovery_iterate(recovery, vy_log_gc_cb_func, log);
 		vy_recovery_delete(recovery);
 	} else {
 		say_warn("vinyl garbage collection failed: %s",
@@ -1173,7 +1215,8 @@ vy_log_write(struct vy_log *log, const struct vy_log_record *record)
 		return;
 	}
 	*tx_record = *record;
-	tx_record->signature = log->signature;
+	if (tx_record->signature < 0)
+		tx_record->signature = log->signature;
 }
 
 /** Lookup an index in vy_recovery::index_hash map. */
@@ -1566,6 +1609,46 @@ vy_recovery_delete_range(struct vy_recovery *recovery, int64_t signature,
 }
 
 /**
+ * Handle a VY_LOG_ROTATE log record.
+ * This function adds the given signature to the hash.
+ * Return 0 on success, -1 on failure (ID collision or OOM).
+ */
+static int
+vy_recovery_rotate_log(struct vy_recovery *recovery, int64_t signature)
+{
+	struct mh_i64ptr_t *h = recovery->rotated_logs;
+	struct mh_i64ptr_node_t node = { signature, NULL };
+	struct mh_i64ptr_node_t *old_node;
+	if (mh_i64ptr_put(h, &node, &old_node, NULL) == mh_end(h)) {
+		diag_set(OutOfMemory, 0, "mh_i64ptr_put", "mh_i64ptr_node_t");
+		return -1;
+	}
+	if (old_node != NULL) {
+		diag_set(ClientError, ER_VINYL, "duplicate log signature");
+		return -1;
+	}
+	return 0;
+}
+
+/**
+ * Handle a VY_LOG_FORGET log record.
+ * This function deletes the given signature from the hash.
+ * Return 0 on success, -1 if the signature is not found.
+ */
+static int
+vy_recovery_forget_log(struct vy_recovery *recovery, int64_t signature)
+{
+	struct mh_i64ptr_t *h = recovery->rotated_logs;
+	mh_int_t k = mh_i64ptr_find(h, signature, NULL);
+	if (k == mh_end(h)) {
+		diag_set(ClientError, ER_VINYL, "unknown log signature");
+		return -1;
+	}
+	mh_i64ptr_del(h, k, NULL);
+	return 0;
+}
+
+/**
  * Update a recovery context with a new log record.
  * Return 0 on success, -1 on failure.
  *
@@ -1613,6 +1696,12 @@ vy_recovery_process_record(struct vy_recovery *recovery,
 	case VY_LOG_FORGET_RUN:
 		rc = vy_recovery_forget_run(recovery, record->run_id);
 		break;
+	case VY_LOG_ROTATE:
+		rc = vy_recovery_rotate_log(recovery, record->signature);
+		break;
+	case VY_LOG_FORGET:
+		rc = vy_recovery_forget_log(recovery, record->signature);
+		break;
 	default:
 		unreachable();
 	}
@@ -1638,16 +1727,16 @@ vy_recovery_new(const char *dir, int64_t signature,
 		goto fail;
 	}
 
-	recovery->index_hash = NULL;
-	recovery->range_hash = NULL;
-	recovery->run_hash = NULL;
+	memset(recovery, 0, sizeof(*recovery));
 	recovery->range_id_max = -1;
 	recovery->run_id_max = -1;
 
+	recovery->rotated_logs = mh_i64ptr_new();
 	recovery->index_hash = mh_i64ptr_new();
 	recovery->range_hash = mh_i64ptr_new();
 	recovery->run_hash = mh_i64ptr_new();
-	if (recovery->index_hash == NULL ||
+	if (recovery->rotated_logs == NULL ||
+	    recovery->index_hash == NULL ||
 	    recovery->range_hash == NULL ||
 	    recovery->run_hash == NULL) {
 		diag_set(OutOfMemory, 0, "mh_i64ptr_new", "mh_i64ptr_t");
@@ -1710,6 +1799,8 @@ vy_recovery_delete_hash(struct mh_i64ptr_t *h)
 static void
 vy_recovery_delete(struct vy_recovery *recovery)
 {
+	if (recovery->rotated_logs != NULL)
+		mh_i64ptr_delete(recovery->rotated_logs);
 	if (recovery->index_hash != NULL)
 		vy_recovery_delete_hash(recovery->index_hash);
 	if (recovery->range_hash != NULL)
@@ -1852,6 +1943,13 @@ vy_recovery_iterate(struct vy_recovery *recovery,
 		    vy_recovery_cb cb, void *cb_arg)
 {
 	mh_int_t i;
+	mh_foreach(recovery->rotated_logs, i) {
+		struct vy_log_record record;
+		record.type = VY_LOG_ROTATE;
+		record.signature = mh_i64ptr_node(recovery->rotated_logs, i)->key;
+		if (vy_recovery_cb_call(cb, cb_arg, &record) != 0)
+			return -1;
+	}
 	mh_foreach(recovery->index_hash, i) {
 		struct vy_index_recovery_info *index;
 		index = mh_i64ptr_node(recovery->index_hash, i)->val;
