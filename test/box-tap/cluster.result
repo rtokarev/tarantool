@@ -1,0 +1,10 @@
+TAP version 13
+1..8
+ok - empty shard in cluster list
+ok - no name specified for host
+ok - no uri specified for host
+ok - shard is not array
+ok - uri is not string
+ok - incorrect uri
+ok - unknown keys
+ok - cluster ok

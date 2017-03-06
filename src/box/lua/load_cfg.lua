@@ -5,6 +5,38 @@ local json = require('json')
 local private = require('box.internal')
 local urilib = require('uri')
 local math = require('math')
+local remote = require('net.box')
+
+function check_cluster_cfg(value)
+    if type(value) ~= 'table' then
+        box.error(box.error.CFG, 'cluster' , type(value))
+    end
+    for name, shard in pairs(value) do
+        if type(shard) ~= 'table' then
+            box.error(box.error.CFG, 'cluster', 'shard is not array - '..type(shard))
+        end
+        if type(name) ~= 'string' then
+            box.error(box.error.CFG, 'cluster', 'name is not string - '..type(name))
+        end
+        local uri = nil
+        for k,v in pairs(shard) do
+            if k == 'uri' then
+                if type(v) ~= 'string' then
+                    box.error(box.error.CFG, 'cluster["'..name..'"].uri', 'uri is not string')
+                end
+                if urilib.parse(v) == nil then
+                    box.error(box.error.CFG, 'cluster["'..name..'"].uri', 'uri is ivalid')
+                end
+                uri = v
+            else
+                box.error(box.error.CFG, 'cluster["'..name..'"]', 'unknown key '..k)
+            end
+        end
+        if uri == nil then
+            box.error(box.error.CFG, 'cluster["'..name..'"]', 'uri is no specified')
+        end
+    end
+end
 
 -- all available options
 local default_cfg = {
@@ -45,6 +77,7 @@ local default_cfg = {
     coredump            = false,
     read_only           = false,
     hot_standby         = false,
+    cluster             = nil,
 
     -- snapshot_daemon
     checkpoint_interval = 0,        -- 0 = disabled
@@ -92,7 +125,8 @@ local template_cfg = {
     checkpoint_interval = 'number',
     checkpoint_count    = 'number',
     read_only           = 'boolean',
-    hot_standby         = 'boolean'
+    hot_standby         = 'boolean',
+    cluster             = check_cluster_cfg
 }
 
 local function normalize_uri(port)
@@ -139,6 +173,26 @@ local dynamic_cfg = {
         require('title').update(box.cfg.custom_proc_title)
     end,
     force_recovery          = function() end,
+    cluster                 = function()
+        if box.cfg.cluster then
+            for name, shard in pairs(box.cfg.cluster) do
+                if not shard.connection or shard.connection.state ~= 'active' then
+                    local conn = remote.connect(shard.uri)
+                    box.cfg.cluster[name].connection = conn
+                    log.info("connection to "..name.." state is %s", conn.state)
+                    -- We set metatable for better usability. With this
+                    -- metatable you can skip .connection member when you
+                    -- want to call net.box methods. Fox example:
+                    --
+                    -- box.cfg.cluster.shard1.connection.space.test:...
+                    --     turns into
+                    -- box.cfg.cluster.shard1.space.test:...
+                    --
+                    setmetatable(box.cfg.cluster[name], { __index = conn })
+                end
+            end
+        end
+    end
 }
 
 local dynamic_cfg_skip_at_load = {
@@ -225,6 +279,8 @@ local function prepare_cfg(cfg, default_cfg, template_cfg, modify_cfg, prefix)
                 box.error(box.error.CFG, readable_name, "should be a table")
             end
             v = prepare_cfg(v, default_cfg[k], template_cfg[k], modify_cfg[k], readable_name)
+        elseif type(template_cfg[k]) == 'function' then
+            template_cfg[k](v)
         elseif (string.find(template_cfg[k], ',') == nil) then
             -- one type
             if type(v) ~= template_cfg[k] then
@@ -335,6 +391,17 @@ local function load_cfg(cfg)
             end,
             __call = reload_cfg,
         })
+
+    -- Connect to shards.
+    if box.cfg.cluster then
+        for name, shard in pairs(box.cfg.cluster) do
+            local conn = remote.connect(shard.uri)
+            box.cfg.cluster[name].connection = conn
+            log.info("connection to "..name.." state is %s", conn.state)
+            setmetatable(box.cfg.cluster[name], { __index = conn })
+        end
+    end
+
     private.cfg_load()
     for key, fun in pairs(dynamic_cfg) do
         local val = cfg[key]
