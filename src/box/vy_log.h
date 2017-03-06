@@ -123,6 +123,11 @@ struct vy_log_record {
 	/** Type of the record. */
 	enum vy_log_type type;
 	/**
+	 * The log signature from the time when the record was
+	 * written. Set by vy_log_write().
+	 */
+	int64_t signature;
+	/**
 	 * Unique ID of the index.
 	 *
 	 * The ID must be unique for different incarnations of
@@ -160,7 +165,7 @@ typedef int
  * Allocate and initialize a vy_log structure.
  * @dir is the directory to store log files in.
  * @gc_cb is the callback that will be called on deleted runs
- * on log rotation (see vy_log_rotate()).
+ * on garbage collection (see vy_log_collect_garbage()).
  * @gc_arg is an argument passed to @gc_cb.
  *
  * Returns NULL on memory allocation failure.
@@ -182,17 +187,22 @@ vy_log_delete(struct vy_log *log);
  * discarding records cancelling each other and records left
  * from dropped indexes.
  *
- * The function calls @gc_cb for each deleted run, passing info
+ * Returns 0 on success, -1 on failure.
+ */
+int
+vy_log_rotate(struct vy_log *log, int64_t signature);
+
+/**
+ * Call @gc_cb for each run deleted strictly before the log
+ * received signature @signature, The callback is passed info
  * necessary to lookup its files and optional argument @gc_arg.
  * The callback is supposed to try to unlink run files and
  * return 0 on success. If it fails, the information about the
  * deleted run won't be removed from the log and deletion will
  * be retried on next log rotation.
- *
- * Returns 0 on success, -1 on failure.
  */
-int
-vy_log_rotate(struct vy_log *log, int64_t signature);
+void
+vy_log_collect_garbage(struct vy_log *log, int64_t signature);
 
 /** Allocate a unique ID for a run. */
 int64_t
