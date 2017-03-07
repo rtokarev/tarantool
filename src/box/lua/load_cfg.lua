@@ -78,6 +78,7 @@ local default_cfg = {
     read_only           = false,
     hot_standby         = false,
     cluster             = nil,
+    server_id           = 1,
 
     -- snapshot_daemon
     checkpoint_interval = 0,        -- 0 = disabled
@@ -126,7 +127,8 @@ local template_cfg = {
     checkpoint_count    = 'number',
     read_only           = 'boolean',
     hot_standby         = 'boolean',
-    cluster             = check_cluster_cfg
+    cluster             = check_cluster_cfg,
+    server_id           = 'number'
 }
 
 local function normalize_uri(port)

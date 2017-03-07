@@ -21,20 +21,21 @@ box.cfg
 16	read_only:false
 17	readahead:16320
 18	rows_per_wal:500000
-19	slab_alloc_factor:1.1
-20	too_long_threshold:0.5
-21	vinyl_bloom_fpr:0.05
-22	vinyl_cache:134217728
-23	vinyl_dir:.
-24	vinyl_memory:134217728
-25	vinyl_page_size:8192
-26	vinyl_range_size:1073741824
-27	vinyl_run_count_per_level:2
-28	vinyl_run_size_ratio:3.5
-29	vinyl_threads:2
-30	wal_dir:.
-31	wal_dir_rescan_delay:2
-32	wal_mode:write
+19	server_id:1
+20	slab_alloc_factor:1.1
+21	too_long_threshold:0.5
+22	vinyl_bloom_fpr:0.05
+23	vinyl_cache:134217728
+24	vinyl_dir:.
+25	vinyl_memory:134217728
+26	vinyl_page_size:8192
+27	vinyl_range_size:1073741824
+28	vinyl_run_count_per_level:2
+29	vinyl_run_size_ratio:3.5
+30	vinyl_threads:2
+31	wal_dir:.
+32	wal_dir_rescan_delay:2
+33	wal_mode:write
 --
 -- Test insert from detached fiber
 --

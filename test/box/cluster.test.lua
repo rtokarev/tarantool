@@ -16,14 +16,14 @@ function create_script(name, code)
     return path
 end;
 
-code_template = "box.cfg{ listen = %s } "..
+code_template = "box.cfg{ listen = %s, server_id = %s } "..
 		"box.schema.user.grant('guest', 'read,write,execute', 'universe') "..
 		"require('console').listen(os.getenv('ADMIN'))";
 test_run:cmd("setopt delimiter ''");
 
-tmp1 = create_script('host1.lua', code_template:format(33130))
-tmp2 = create_script('host2.lua', code_template:format(33131))
-tmp3 = create_script('host3.lua', code_template:format(33132))
+tmp1 = create_script('host1.lua', code_template:format(33130, 1))
+tmp2 = create_script('host2.lua', code_template:format(33131, 2))
+tmp3 = create_script('host3.lua', code_template:format(33132, 3))
 
 --
 -- Create shard instances.
@@ -56,6 +56,8 @@ box.cfg{
 
 test_run:cmd("setopt delimiter ''");
 
+box.cfg.server_id == box.info.server.id
+box.cfg.server_id
 box.cfg.cluster.shard1.state
 box.cfg.cluster.shard2.state
 box.cfg.cluster.shard3.state
@@ -75,6 +77,8 @@ box.cfg{
 
 test_run:cmd("setopt delimiter ''");
 
+box.cfg.server_id == box.info.server.id
+box.cfg.server_id
 box.cfg.cluster.shard1.state
 box.cfg.cluster.shard2.state
 box.cfg.cluster.shard3.state
@@ -94,6 +98,8 @@ box.cfg{
 
 test_run:cmd("setopt delimiter ''");
 
+box.cfg.server_id == box.info.server.id
+box.cfg.server_id
 box.cfg.cluster.shard1.state
 box.cfg.cluster.shard2.state
 box.cfg.cluster.shard3.state
