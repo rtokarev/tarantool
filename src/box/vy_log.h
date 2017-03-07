@@ -320,6 +320,16 @@ int
 vy_log_recover_index(struct vy_log *log, int64_t index_id,
 		     vy_recovery_cb cb, void *cb_arg);
 
+/**
+ * Call @cb for each index, range, and run stored in the most recent
+ * snapshot of the given log. Ranges and runs of an index are iterated
+ * in the same order as the one used by vy_log_recover_index().
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int
+vy_log_relay(struct vy_log *log, vy_recovery_cb cb, void *cb_arg);
+
 /** Helper to log an index creation. */
 static inline void
 vy_log_create_index(struct vy_log *log, int64_t index_id,

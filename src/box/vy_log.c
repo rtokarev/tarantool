@@ -290,7 +290,7 @@ static int
 vy_recovery_iterate_index(struct vy_index_recovery_info *index,
 		bool include_deleted, vy_recovery_cb cb, void *cb_arg);
 static int
-vy_recovery_iterate(struct vy_recovery *recovery,
+vy_recovery_iterate(struct vy_recovery *recovery, bool include_deleted,
 		    vy_recovery_cb cb, void *cb_arg);
 static int
 vy_recovery_rotate_log(struct vy_recovery *recovery, int64_t signature);
@@ -864,7 +864,8 @@ vy_log_end_recovery(struct vy_log *log)
 	 * or not inserted into a range. We need to delete such runs
 	 * on recovery.
 	 */
-	vy_recovery_iterate(log->recovery, vy_log_recovery_gc_cb_func, log);
+	vy_recovery_iterate(log->recovery, true,
+			    vy_log_recovery_gc_cb_func, log);
 
 	vy_recovery_delete(log->recovery);
 	log->recovery = NULL;
@@ -989,7 +990,8 @@ vy_log_rotate_f(va_list ap)
 		.xlog_is_open = false,
 		.xlog_path = path,
 	};
-	if (vy_recovery_iterate(recovery, vy_log_rotate_cb_func, &arg) < 0)
+	if (vy_recovery_iterate(recovery, true,
+				vy_log_rotate_cb_func, &arg) < 0)
 		goto err_write_xlog;
 
 	if (!arg.xlog_is_open)
@@ -1115,7 +1117,7 @@ vy_log_collect_garbage(struct vy_log *log, int64_t signature)
 
 	if (rc == 0) {
 		/* Cleanup unused runs. */
-		vy_recovery_iterate(recovery, vy_log_gc_cb_func, log);
+		vy_recovery_iterate(recovery, true, vy_log_gc_cb_func, log);
 		vy_recovery_delete(recovery);
 	} else {
 		say_warn("vinyl garbage collection failed: %s",
@@ -1123,6 +1125,59 @@ vy_log_collect_garbage(struct vy_log *log, int64_t signature)
 	}
 
 	say_debug("%s: done", __func__);
+}
+
+/** Argument passed to vy_log_relay_f(). */
+struct vy_log_relay_arg {
+	/** The recovery context to relay. */
+	struct vy_recovery *recovery;
+	/** The relay callback. */
+	vy_recovery_cb cb;
+	/** The relay callback argument. */
+	void *cb_arg;
+};
+
+/** Relay cord function. */
+static int
+vy_log_relay_f(va_list ap)
+{
+	struct vy_log_relay_arg *arg = va_arg(ap, struct vy_log_relay_arg *);
+	return vy_recovery_iterate(arg->recovery, false, arg->cb, arg->cb_arg);
+}
+
+int
+vy_log_relay(struct vy_log *log, vy_recovery_cb cb, void *cb_arg)
+{
+	/*
+	 * First, load the latest snapshot of the metadata log.
+	 * Use coeio in order not ot block tx thread.
+	 */
+	latch_lock(&log->latch);
+	struct vy_recovery *recovery;
+	int rc = coio_call(vy_recovery_new_f, log->dir, log->signature,
+			   log->signature, &recovery);
+	latch_unlock(&log->latch);
+	if (rc != 0)
+		return -1;
+
+	/*
+	 * Second, relay the state stored in the log via
+	 * the provided callback.
+	 */
+	struct vy_log_relay_arg arg = {
+		.recovery = recovery,
+		.cb = cb,
+		.cb_arg = cb_arg,
+	};
+	struct cord cord;
+	if (cord_costart(&cord, "initial_join", vy_log_relay_f, &arg) != 0) {
+		vy_recovery_delete(recovery);
+		return -1;
+	}
+	if (cord_cojoin(&cord) != 0)
+		return -1;
+
+	return 0;
 }
 
 void
@@ -1939,21 +1994,25 @@ vy_recovery_iterate_index(struct vy_index_recovery_info *index,
  * See vy_recovery_iterate_index() for more details.
  */
 static int
-vy_recovery_iterate(struct vy_recovery *recovery,
+vy_recovery_iterate(struct vy_recovery *recovery, bool include_deleted,
 		    vy_recovery_cb cb, void *cb_arg)
 {
 	mh_int_t i;
-	mh_foreach(recovery->rotated_logs, i) {
-		struct vy_log_record record;
-		record.type = VY_LOG_ROTATE;
-		record.signature = mh_i64ptr_node(recovery->rotated_logs, i)->key;
-		if (vy_recovery_cb_call(cb, cb_arg, &record) != 0)
-			return -1;
+	if (include_deleted) {
+		mh_foreach(recovery->rotated_logs, i) {
+			struct vy_log_record record;
+			record.type = VY_LOG_ROTATE;
+			record.signature = mh_i64ptr_node(
+					recovery->rotated_logs, i)->key;
+			if (vy_recovery_cb_call(cb, cb_arg, &record) != 0)
+				return -1;
+		}
 	}
 	mh_foreach(recovery->index_hash, i) {
 		struct vy_index_recovery_info *index;
 		index = mh_i64ptr_node(recovery->index_hash, i)->val;
-		if (vy_recovery_iterate_index(index, true, cb, cb_arg) < 0)
+		if (vy_recovery_iterate_index(index, include_deleted,
+					      cb, cb_arg) < 0)
 			return -1;
 	}
 	return 0;
