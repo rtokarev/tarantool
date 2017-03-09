@@ -204,6 +204,9 @@ vy_upsert(struct vy_tx *tx, struct txn_stmt *stmt, struct space *space,
 	  struct request *request);
 
 int
+vy_check_aborted(struct vy_env *e, struct vy_tx *tx);
+
+int
 vy_prepare(struct vy_env *e, struct vy_tx *tx);
 
 int

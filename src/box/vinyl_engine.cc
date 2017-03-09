@@ -49,6 +49,11 @@
 #include "iproto_constants.h"
 #include "vinyl.h"
 #include "vy_stmt.h"
+#include "ipc.h"
+
+static bool in_two_phase_transaction = false;
+static struct ipc_cond two_phase_txn_cond;
+static bool is_aborted_two_phase = false;
 
 struct tuple_format_vtab vy_tuple_format_vtab = {
 	vy_tuple_delete,
@@ -81,6 +86,7 @@ VinylEngine::init()
 	env = vy_env_new();
 	if (env == NULL)
 		panic("failed to create vinyl environment");
+	ipc_cond_create(&two_phase_txn_cond);
 }
 
 void
@@ -258,6 +264,17 @@ void
 VinylEngine::prepare(struct txn *txn)
 {
 	struct vy_tx *tx = (struct vy_tx *) txn->engine_tx;
+	if (vy_check_aborted(env, tx) != 0)
+		diag_raise();
+	/* There is another two phase transaction. */
+	if (in_two_phase_transaction)
+		ipc_cond_wait(&two_phase_txn_cond);
+	assert(! in_two_phase_transaction);
+	if (is_aborted_two_phase) {
+		txn_rollback();
+		tnt_raise(ClientError, ER_TRANSACTION_CONFLICT);
+	}
+	in_two_phase_transaction = txn->is_two_phase;
 
 	if (vy_prepare(env, tx))
 		diag_raise();
@@ -304,6 +321,11 @@ VinylEngine::commit(struct txn *txn, int64_t lsn)
 			      PRIu64, lsn);
 		}
 		txn->engine_tx = NULL;
+		if (txn->is_two_phase) {
+			in_two_phase_transaction = false;
+			is_aborted_two_phase = false;
+			ipc_cond_broadcast(&two_phase_txn_cond);
+		}
 	}
 }
 
@@ -319,6 +341,12 @@ VinylEngine::rollback(struct txn *txn)
 	struct txn_stmt *stmt;
 	stailq_foreach_entry(stmt, &txn->stmts, next) {
 		txn_stmt_unref_tuples(stmt);
+	}
+	if (txn->is_two_phase) {
+		in_two_phase_transaction = false;
+		is_aborted_two_phase = true;
+		ipc_cond_broadcast(&two_phase_txn_cond);
+		is_aborted_two_phase = false;
 	}
 }
 
