@@ -81,14 +81,21 @@ end;
 test_run:cmd("setopt delimiter ''");
 f1 = fiber.create(good_tx) -- begin goot_tx
 f2 = fiber.create(bad_tx)  -- begin bad_tx
+box.space._transaction:select{}
 f1:wakeup() -- good_tx update
+box.space._transaction:select{}
 f2:wakeup() -- bad_tx update
+box.space._transaction:select{}
 f1:wakeup() -- goot_tx prepare
+box.space._transaction:select{}
 f2:wakeup() -- bad_tx prepare FAILED
 test_run:grep_log("default", "ER_TRANSACTION_CONFLICT", 500) ~= nil
+box.space._transaction:select{}
 space:select{}
 f1:wakeup() -- good_tx commit
+box.space._transaction:select{}
 f2:wakeup() -- bad_tx fiber is dead
+box.space._transaction:select{}
 space:select{}
 
 -- Test recovery.

@@ -206,7 +206,7 @@ struct iproto_connection
 	/* Pre-allocated disconnect msg. */
 	struct iproto_msg *disconnect;
 	struct rlist in_stop_list;
-	/** Hash of opened transactions. */
+	/** Hash of opened in this connection transactions. */
 	struct mh_i64ptr_t *transactions;
 };
 

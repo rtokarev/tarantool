@@ -48,6 +48,10 @@ struct space;
 struct tuple;
 struct xrow_header;
 struct txn;
+struct mh_i64ptr_t;
+
+/** Hash of opened transactions. */
+extern struct mh_i64ptr_t *transactions;
 
 /**
  * A single statement of a multi-statement

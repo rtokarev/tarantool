@@ -67,6 +67,7 @@
 #include "xrow_io.h"
 #include "authentication.h"
 #include "path_lock.h"
+#include "assoc.h"
 
 static char status[64] = "unknown";
 
@@ -244,23 +245,56 @@ apply_row(struct xstream *stream, struct xrow_header *row)
 {
 	assert(row->bodycnt == 1); /* always 1 for read */
 	(void) stream;
+	uint64_t tx_id = row->tx_id;
+	mh_int_t existing_tx;
+	struct txn *txn = NULL;
+	if (tx_id == 0) {
+		/* Autocommit. */
+		existing_tx = mh_end(transactions);
+	} else {
+		existing_tx = mh_i64ptr_find(transactions, tx_id, NULL);
+		if (existing_tx != mh_end(transactions))
+			txn = (struct txn *) mh_i64ptr_node(transactions,
+							    existing_tx)->val;
+	}
 	struct request *request = xrow_decode_request(row);
 	if (row->type != IPROTO_PREPARE && row->type != IPROTO_COMMIT &&
 	    row->type != IPROTO_ROLLBACK) {
+		assert(txn == NULL && tx_id == 0 ||
+		       existing_tx != mh_end(transactions));
+		fiber_set_txn(fiber(), txn);
 		struct space *space = space_cache_find(request->space_id);
 		process_rw(request, space, NULL);
 	} else if (row->type == IPROTO_PREPARE) {
-		if (box_txn_begin_two_phase(row->tx_id,
-					    row->coordinator_id) != 0)
-			diag_raise();
+		/*
+		 * The transaction id must be unique in
+		 * intersected transactions.
+		 */
+		assert(txn == NULL && existing_tx == mh_end(transactions));
+		fiber_set_txn(fiber(), NULL);
+		txn_begin_two_phase(tx_id, row->coordinator_id);
+		struct txn *txn = in_txn();
+		assert(txn != NULL);
+		assert(txn->tx_id == tx_id);
+		assert(txn->coordinator_id == row->coordinator_id);
+		const struct mh_i64ptr_node_t node = { tx_id, txn };
+		mh_int_t rc = mh_i64ptr_put(transactions, &node, NULL, NULL);
+		if (rc == mh_end(transactions))
+			tnt_raise(OutOfMemory, (ssize_t) rc, "malloc", "node");
 	} else if (row->type == IPROTO_COMMIT) {
 		struct xrow_header header;
 		memcpy(&header, row, sizeof(header));
 		header.type = IPROTO_PREPARE;
-		txn_prepare_two_phase(in_txn(), &header);
+		assert(txn != NULL && existing_tx != mh_end(transactions));
+		mh_i64ptr_del(transactions, existing_tx, NULL);
+		fiber_set_txn(fiber(), txn);
+		txn_prepare_two_phase(txn, &header);
 		if (box_txn_commit() != 0)
 			diag_raise();
 	} else if (row->type == IPROTO_ROLLBACK) {
+		assert(txn != NULL && existing_tx != mh_end(transactions));
+		mh_i64ptr_del(transactions, existing_tx, NULL);
+		fiber_set_txn(fiber(), txn);
 		if (box_txn_rollback())
 			diag_raise();
 	}
