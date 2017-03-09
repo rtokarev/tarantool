@@ -189,6 +189,9 @@ replicaset_add(uint32_t replica_id, const struct tt_uuid *instance_uuid);
 void
 replicaset_update(struct applier **appliers, int count);
 
+void
+replica_promote_vclock(struct vclock *vclock, uint32_t *replica_id, int64_t *lsn);
+
 #endif /* defined(__cplusplus) */
 
 #endif

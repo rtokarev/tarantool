@@ -269,3 +269,26 @@ replica_by_uuid(const struct tt_uuid *uuid)
 	key.uuid = *uuid;
 	return replicaset_search(&replicaset, &key);
 }
+
+void
+replica_promote_vclock(struct vclock *vclock, uint32_t *replica_id, int64_t *lsn)
+{
+	if (*replica_id == 0) {
+		/* Local request. */
+		*replica_id = instance_id;
+		*lsn = vclock_inc(vclock, instance_id);
+	} else {
+		/* Replication request. */
+		if (replica_id_is_reserved(*replica_id) ||
+		    *replica_id >= VCLOCK_MAX) {
+			/*
+			 * A safety net, this can only occur
+			 * if we're fed a strangely broken xlog.
+			 */
+			tnt_raise(ClientError, ER_UNKNOWN_REPLICA,
+				  int2str(*replica_id),
+				  tt_uuid_str(&REPLICASET_UUID));
+		}
+		vclock_follow(vclock, *replica_id, *lsn);
+	}
+}

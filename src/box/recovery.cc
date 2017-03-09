@@ -94,33 +94,6 @@
  * R -> M           # remote_stop()
  */
 
-/* {{{ LSN API */
-
-void
-recovery_fill_lsn(struct recovery *r, struct xrow_header *row)
-{
-	if (row->replica_id == 0) {
-		/* Local request. */
-		row->replica_id = instance_id;
-		row->lsn = vclock_inc(&r->vclock, instance_id);
-	} else {
-		/* Replication request. */
-		if (replica_id_is_reserved(row->replica_id) ||
-		    row->replica_id >= VCLOCK_MAX) {
-			/*
-			 * A safety net, this can only occur
-			 * if we're fed a strangely broken xlog.
-			 */
-			tnt_raise(ClientError, ER_UNKNOWN_REPLICA,
-				  int2str(row->replica_id),
-				  tt_uuid_str(&REPLICASET_UUID));
-		}
-		vclock_follow(&r->vclock,  row->replica_id, row->lsn);
-	}
-}
-
-/* }}} */
-
 /* {{{ Initial recovery */
 
 /**

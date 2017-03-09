@@ -36,6 +36,7 @@
 #include "wal.h"
 #include <fiber.h>
 #include "xrow.h"
+#include "replication.h"
 
 enum {
 	/**
@@ -182,7 +183,6 @@ txn_commit_stmt(struct txn *txn, struct request *request)
 		txn_commit(txn);
 }
 
-
 static int64_t
 txn_write_to_wal(struct txn *txn)
 {
@@ -204,24 +204,13 @@ txn_write_to_wal(struct txn *txn)
 	stailq_foreach_entry(stmt, &txn->stmts, next) {
 		if (stmt->row == NULL)
 			continue; /* A read (e.g. select) request */
-		/*
-		 * Bump current LSN even if wal_mode = NONE, so that
-		 * snapshots still works with WAL turned off.
-		 */
-		recovery_fill_lsn(recovery, stmt->row);
 		stmt->row->tm = ev_now(loop());
 		req->rows[req->n_rows++] = stmt->row;
 	}
 	assert(req->n_rows == txn->n_rows);
 
 	ev_tstamp start = ev_now(loop()), stop;
-	int64_t res;
-	if (wal == NULL) {
-		/** wal_mode = NONE or initial recovery. */
-		res = vclock_sum(&recovery->vclock);
-	} else {
-		res = wal_write(req);
-	}
+	int64_t res = wal_write(req);
 
 	stop = ev_now(loop());
 	if (stop - start > too_long_threshold)
@@ -243,6 +232,25 @@ txn_write_to_wal(struct txn *txn)
 	return res;
 }
 
+static int64_t
+txn_promote_vclock(struct txn *txn)
+{
+	struct txn_stmt *stmt;
+	stailq_foreach_entry(stmt, &txn->stmts, next) {
+		if (stmt->row == NULL)
+			continue; /* A read (e.g. select) request */
+		/*
+		 * Bump current LSN even if wal_mode = NONE, so that
+		 * snapshots still works with WAL turned off.
+		 */
+
+		replica_promote_vclock(&recovery->vclock,
+				       &stmt->row->replica_id,
+				       &stmt->row->lsn);
+	}
+	return vclock_sum(&recovery->vclock);
+}
+
 void
 txn_commit(struct txn *txn)
 {
@@ -255,8 +263,11 @@ txn_commit(struct txn *txn)
 		int64_t signature = -1;
 		txn->engine->prepare(txn);
 
-		if (txn->n_rows > 0)
-			signature = txn_write_to_wal(txn);
+		if (txn->n_rows > 0) {
+			signature = txn_promote_vclock(txn);
+			if (wal != NULL)
+				signature = txn_write_to_wal(txn);
+		}
 		/*
 		 * The transaction is in the binary log. No action below
 		 * may throw. In case an error has happened, there is
