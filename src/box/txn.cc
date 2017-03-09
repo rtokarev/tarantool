@@ -244,11 +244,11 @@ txn_promote_vclock(struct txn *txn)
 		 * snapshots still works with WAL turned off.
 		 */
 
-		replica_promote_vclock(&recovery->vclock,
+		replica_promote_vclock(&instance_vclock,
 				       &stmt->row->replica_id,
 				       &stmt->row->lsn);
 	}
-	return vclock_sum(&recovery->vclock);
+	return vclock_sum(&instance_vclock);
 }
 
 void

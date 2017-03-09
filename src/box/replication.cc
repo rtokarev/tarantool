@@ -69,6 +69,7 @@ rb_gen(, replicaset_, replicaset_t, struct replica, link,
 static struct mempool replica_pool;
 static replicaset_t replicaset;
 uint32_t instance_id = REPLICA_ID_NIL;
+struct vclock instance_vclock;
 
 void
 replication_init(void)
@@ -268,6 +269,12 @@ replica_by_uuid(const struct tt_uuid *uuid)
 	struct replica key;
 	key.uuid = *uuid;
 	return replicaset_search(&replicaset, &key);
+}
+
+void
+replica_init_vclock(struct vclock *start_vclock)
+{
+	vclock_copy(&instance_vclock, start_vclock);
 }
 
 void

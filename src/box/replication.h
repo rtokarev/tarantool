@@ -94,6 +94,9 @@ replication_free(void);
 
 /** Instance id vclock identifier */
 extern uint32_t instance_id;
+/** Instance vclock */
+extern struct vclock instance_vclock;
+
 
 /** UUID of the instance. */
 extern struct tt_uuid INSTANCE_UUID;
@@ -189,6 +192,21 @@ replicaset_add(uint32_t replica_id, const struct tt_uuid *instance_uuid);
 void
 replicaset_update(struct applier **appliers, int count);
 
+/**
+ * Setup initial instance vclock value from start_vclock.
+ * This can be zero-vclock for local bootstrap or master vclock of
+ * initial join stream in case of remote bootsrap or local checkpoint
+ *  vclock for recovery
+ */
+void
+replica_init_vclock(struct vclock *start_vclock);
+
+/**
+ * Move vclock forward. If replica_id is not set (this mean that the row
+ * was generated from local transaction) then increase corresponding
+ * vclock component and set replica_id and lsn else follow remote lsn
+ * value
+ */
 void
 replica_promote_vclock(struct vclock *vclock, uint32_t *replica_id, int64_t *lsn);
 

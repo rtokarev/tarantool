@@ -199,9 +199,15 @@ recover_xlog(struct recovery *r, struct xstream *stream,
 		if (stop_vclock != NULL &&
 		    r->vclock.signature >= stop_vclock->signature)
 			return;
+		/*
+		 * This is possible in case of recovery restart,
+		 * but we don't do it now.
+		 */
 		int64_t current_lsn = vclock_get(&r->vclock, row.replica_id);
 		if (row.lsn <= current_lsn)
 			continue; /* already applied, skip */
+		/* Update recovery vclock */
+		vclock_follow(&r->vclock, row.replica_id, row.lsn);
 
 		try {
 			xstream_write(stream, &row);

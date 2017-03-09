@@ -130,7 +130,7 @@ relay_final_join(int fd, uint64_t sync, struct vclock *start_vclock,
 	if (cord_cojoin(&relay.cord) != 0)
 		diag_raise();
 	ERROR_INJECT(ERRINJ_RELAY_FINAL_SLEEP, {
-		while (vclock_compare(stop_vclock, &recovery->vclock) == 0)
+		while (vclock_compare(stop_vclock, &instance_vclock) == 0)
 			fiber_sleep(0.001);
 	});
 }
@@ -266,9 +266,6 @@ relay_send_final_join_row(struct xstream *stream, struct xrow_header *row)
 {
 	struct relay *relay = container_of(stream, struct relay, stream);
 	assert(iproto_type_is_dml(row->type));
-	struct recovery *r = relay->r;
-
-	vclock_follow(&r->vclock, row->replica_id, row->lsn);
 
 	relay_send(relay, row);
 	ERROR_INJECT(ERRINJ_RELAY,
@@ -284,8 +281,6 @@ relay_send_subscribe_row(struct xstream *stream, struct xrow_header *packet)
 	struct relay *relay = container_of(stream, struct relay, stream);
 	assert(iproto_type_is_dml(packet->type));
 
-	struct recovery *r = relay->r;
-
 	/*
 	 * We're feeding a WAL, thus responding to SUBSCRIBE request.
 	 * In that case, only send a row if it is not from the same replica
@@ -298,10 +293,4 @@ relay_send_subscribe_row(struct xstream *stream, struct xrow_header *packet)
 			fiber_sleep(1000.0);
 		});
 	}
-	/*
-	 * Update local vclock. During normal operation wal_write()
-	 * updates local vclock. In relay mode we have to update
-	 * it here.
-	 */
-	vclock_follow(&r->vclock, packet->replica_id, packet->lsn);
 }

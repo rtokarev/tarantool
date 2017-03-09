@@ -77,8 +77,6 @@ static void title(const char *new_status)
 	title_update();
 }
 
-struct recovery *recovery;
-
 bool box_snapshot_is_in_progress = false;
 /**
  * The instance is in read-write mode: the local checkpoint
@@ -310,7 +308,7 @@ static void
 apply_subscribe_row(struct xstream *stream, struct xrow_header *row)
 {
 	/* Check lsn */
-	int64_t current_lsn = vclock_get(&recovery->vclock, row->replica_id);
+	int64_t current_lsn = vclock_get(&instance_vclock, row->replica_id);
 	if (row->lsn <= current_lsn)
 		return;
 	apply_row(stream, row);
@@ -828,7 +826,7 @@ space_truncate(struct space *space)
 
 	/* create all indexes again, now they are empty */
 	for (int i = 0; i < index_count; i++) {
-		int64_t lsn = vclock_sum(&recovery->vclock);
+		int64_t lsn = vclock_sum(&instance_vclock);
 		/*
 		 * The returned tuple is blessed and will be
 		 * collected automatically.
@@ -1309,10 +1307,6 @@ box_set_replicaset_uuid()
 void
 box_free(void)
 {
-	if (recovery) {
-		recovery_exit(recovery);
-		recovery = NULL;
-	}
 	/*
 	 * See gh-584 "box_free() is called even if box is not
 	 * initialized
@@ -1457,21 +1451,23 @@ bootstrap_from_master(struct replica *master, struct vclock *start_vclock)
  * instance
  */
 static void
-bootstrap(struct vclock *start_vclock)
+bootstrap()
 {
+	struct vclock start_vclock;
 	/* Use the first replica by URI as a bootstrap leader */
 	struct replica *master = replicaset_first();
 	assert(master == NULL || master->applier != NULL);
 
 	if (master != NULL && !tt_uuid_is_equal(&master->uuid, &INSTANCE_UUID)) {
-		bootstrap_from_master(master, start_vclock);
+		bootstrap_from_master(master, &start_vclock);
 	} else {
 		bootstrap_master();
-		vclock_create(start_vclock);
+		vclock_create(&start_vclock);
 	}
 	if (engine_begin_checkpoint() ||
-	    engine_commit_checkpoint(start_vclock))
+	    engine_commit_checkpoint(&start_vclock))
 		panic("failed to save a snapshot");
+	replica_init_vclock(&start_vclock);
 }
 
 static void
@@ -1537,9 +1533,6 @@ box_cfg_xc(void)
 	struct vclock checkpoint_vclock;
 	vclock_create(&checkpoint_vclock);
 	int64_t lsn = recovery_last_checkpoint(&checkpoint_vclock);
-	recovery = recovery_new(cfg_gets("wal_dir"),
-				cfg_geti("panic_on_wal_error"),
-				&checkpoint_vclock);
 	/*
 	 * Lock the write ahead log directory to avoid multiple
 	 * instances running in the same dir.
@@ -1574,8 +1567,12 @@ box_cfg_xc(void)
 		 */
 		memtx->recoverSnapshot();
 
-		/* Replace instance vclock using the data from snapshot */
-		vclock_copy(&recovery->vclock, &checkpoint_vclock);
+		replica_init_vclock(&checkpoint_vclock);
+
+		struct recovery *recovery;
+		recovery = recovery_new(cfg_gets("wal_dir"),
+					cfg_geti("panic_on_wal_error"),
+					&checkpoint_vclock);
 		engine_begin_final_recovery();
 		title("orphan");
 		recovery_follow_local(recovery, &wal_stream.base, "hot_standby",
@@ -1600,6 +1597,7 @@ box_cfg_xc(void)
 			box_bind();
 		}
 		recovery_finalize(recovery, &wal_stream.base);
+		recovery_delete(recovery);
 		engine_end_recovery();
 
 		/** Begin listening only when the local recovery is complete. */
@@ -1618,7 +1616,7 @@ box_cfg_xc(void)
 		box_sync_replication_source(TIMEOUT_INFINITY);
 
 		/* Bootstrap a new master */
-		bootstrap(&recovery->vclock);
+		bootstrap();
 	}
 	fiber_gc();
 
@@ -1630,7 +1628,7 @@ box_cfg_xc(void)
 	enum wal_mode wal_mode = box_check_wal_mode(cfg_gets("wal_mode"));
 	if (wal_mode != WAL_NONE) {
 		wal_init(wal_mode, cfg_gets("wal_dir"), &INSTANCE_UUID,
-			 &recovery->vclock, rows_per_wal);
+			 &instance_vclock, rows_per_wal);
 	}
 
 	rmean_cleanup(rmean_box);
@@ -1688,7 +1686,7 @@ box_snapshot()
 
 	struct vclock vclock;
 	if (wal == NULL) {
-		vclock_copy(&vclock, &recovery->vclock);
+		vclock_copy(&vclock, &instance_vclock);
 	} else {
 		wal_checkpoint(&vclock, true);
 	}

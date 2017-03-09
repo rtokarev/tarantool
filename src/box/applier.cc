@@ -291,9 +291,7 @@ applier_subscribe(struct applier *applier)
 	struct iobuf *iobuf = applier->iobuf;
 	struct xrow_header row;
 
-	/* TODO: don't use struct recovery here */
-	struct recovery *r = ::recovery;
-	xrow_encode_subscribe(&row, &REPLICASET_UUID, &INSTANCE_UUID, &r->vclock);
+	xrow_encode_subscribe(&row, &REPLICASET_UUID, &INSTANCE_UUID, &instance_vclock);
 	coio_write_xrow(coio, &row);
 	applier_set_state(applier, APPLIER_FOLLOW);
 
