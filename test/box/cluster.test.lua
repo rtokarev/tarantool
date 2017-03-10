@@ -18,6 +18,8 @@ end;
 
 code_template = "box.cfg{ listen = %s, server_id = %s } "..
 		"box.schema.user.grant('guest', 'read,write,execute', 'universe') "..
+		"space = box.schema.space.create('test', { engine = 'vinyl' })"..
+		"pk = space:create_index('primary')"..
 		"require('console').listen(os.getenv('ADMIN'))";
 test_run:cmd("setopt delimiter ''");
 
@@ -103,6 +105,34 @@ box.cfg.server_id
 box.cfg.cluster.shard1.state
 box.cfg.cluster.shard2.state
 box.cfg.cluster.shard3.state
+
+---------------- Make two-phase transaction ----------------
+
+test_run:cmd('switch host1')
+
+cluster = box.cfg.cluster
+cluster.shard1:begin_two_phase(box.cfg.server_id)
+cluster.shard2:begin_two_phase(box.cfg.server_id)
+cluster.shard3:begin_two_phase(box.cfg.server_id)
+
+cluster.shard1.space.test:replace({1})
+cluster.shard2.space.test:replace({2})
+cluster.shard3.space.test:replace({3})
+
+cluster.shard1:prepare(box.cfg.server_id)
+cluster.shard2:prepare(box.cfg.server_id)
+cluster.shard3:prepare(box.cfg.server_id)
+
+cluster.shard1:commit()
+cluster.shard2:commit()
+cluster.shard3:commit()
+
+cluster.shard1.space._transaction:select{}
+cluster.shard2.space._transaction:select{}
+cluster.shard3.space._transaction:select{}
+cluster.shard1.space.test:select{}
+cluster.shard2.space.test:select{}
+cluster.shard3.space.test:select{}
 
 test_run:cmd('switch default')
 
