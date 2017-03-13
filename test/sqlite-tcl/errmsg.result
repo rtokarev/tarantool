@@ -1,21 +1,12 @@
 errmsg-1.1... Ok
 errmsg-1.2... Ok
 errmsg-2.1... Ok
-errmsg-2.2...
-Expected: [SQLITE_ERROR {SQL logic error or missing database} SQLITE_CONSTRAINT {UNIQUE constraint failed: t1.b}]
-     Got: [SQLITE_DONE {unknown error} SQLITE_OK {not an error}]
-errmsg-2.2b...
-Expected: [SQLITE_CONSTRAINT_UNIQUE]
-     Got: [SQLITE_OK]
-errmsg-2.3...
-Expected: [SQLITE_CONSTRAINT {UNIQUE constraint failed: t1.b} SQLITE_CONSTRAINT {UNIQUE constraint failed: t1.b}]
-     Got: [SQLITE_UNKNOWN(255) {unknown error} SQLITE_UNKNOWN(255) {unknown error}]
-errmsg-2.3b...
-Expected: [SQLITE_CONSTRAINT_UNIQUE]
-     Got: [SQLITE_UNKNOWN(-1)]
+errmsg-2.2... Ok
+errmsg-2.2b... Ok
+errmsg-2.3... Ok
+errmsg-2.3b... Ok
 errmsg-3.1.1... Ok
 errmsg-3.1.2... Ok
 errmsg-3.2.1... Ok
 errmsg-3.2.2... Ok
-4 errors out of 12 tests
-Failures on these tests: errmsg-2.2 errmsg-2.2b errmsg-2.3 errmsg-2.3b
+0 errors out of 12 tests

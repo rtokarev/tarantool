@@ -1,17 +1,13 @@
 whereG-1.0... Ok
 whereG-1.1... Ok
 whereG-1.2... Ok
-whereG-1.3...
-Expected: [/.*track.*composer.*album.*/]
-     Got: [0 0 1 {SCAN TABLE composer} 0 1 2 {SEARCH TABLE track USING COVERING INDEX 527_1_track_i1 (cid=?)} 0 2 0 {SEARCH TABLE album USING PRIMARY KEY (aid=?)} 0 0 0 {USE TEMP B-TREE FOR DISTINCT}]
+whereG-1.3... Ok
 whereG-1.4... Ok
-whereG-1.5...
-Expected: [/.*track.*(composer.*album|album.*composer).*/]
-     Got: [0 0 0 {SCAN TABLE album} 0 1 2 {SEARCH TABLE track USING COVERING INDEX 527_2_track_i2 (aid=?)} 0 2 1 {SEARCH TABLE composer USING PRIMARY KEY (cid=?)} 0 0 0 {USE TEMP B-TREE FOR DISTINCT}]
+whereG-1.5... Ok
 whereG-1.6... Ok
 whereG-1.7...
 Expected: [/.*track.*(composer.*album|album.*composer).*/]
-     Got: [0 0 0 {SCAN TABLE album} 0 1 2 {SEARCH TABLE track USING COVERING INDEX 527_2_track_i2 (aid=?)} 0 2 1 {SEARCH TABLE composer USING PRIMARY KEY (cid=?)} 0 0 0 {USE TEMP B-TREE FOR DISTINCT}]
+     Got: [0 0 0 {SCAN TABLE album} 0 1 2 {SEARCH TABLE track USING INDEX track_i2 (aid=?)} 0 2 1 {SEARCH TABLE composer USING PRIMARY KEY (cid=?)} 0 0 0 {USE TEMP B-TREE FOR DISTINCT}]
 whereG-1.8... Ok
 whereG-2.1... Ok
 whereG-2.2... Ok
@@ -19,5 +15,5 @@ whereG-2.3... Ok
 whereG-3.0... Ok
 whereG-4.0... Ok
 whereG-5.1... Ok
-3 errors out of 16 tests
-Failures on these tests: whereG-1.3 whereG-1.5 whereG-1.7
+1 errors out of 16 tests
+Failures on these tests: whereG-1.7
