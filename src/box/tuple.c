@@ -130,21 +130,25 @@ tuple_validate_raw(struct tuple_format *format, const char *tuple)
 			 (unsigned) format->exact_field_count);
 		return -1;
 	}
-	if (unlikely(field_count < format->min_field_count)) {
-		diag_set(ClientError, ER_INDEX_FIELD_COUNT,
-			 (unsigned) field_count,
-			 (unsigned) format->min_field_count);
-		return -1;
-	}
 
 	/* Check field types */
 	struct tuple_field *field = &format->fields[0];
 	uint32_t i = 0;
-	uint32_t defined_field_count = MIN(field_count, format->field_count);
-	for (; i < defined_field_count; ++i, ++field) {
-		if (key_mp_type_validate(field->type, mp_typeof(*tuple),
-					 ER_FIELD_TYPE, i + TUPLE_INDEX_BASE,
-					 field->is_nullable))
+	for (; i < format->field_count; ++i, ++field) {
+		if (i >= field_count) {
+			if (i >= format->min_field_count)
+				break;
+			if (field->is_nullable)
+				continue;
+			else {
+				diag_set(ClientError, ER_INDEX_FIELD_COUNT,
+					 (unsigned) field_count,
+					 (unsigned) format->min_field_count);
+				return -1;
+			}
+		} else if (key_mp_type_validate(field->type, mp_typeof(*tuple),
+						ER_FIELD_TYPE, i + TUPLE_INDEX_BASE,
+						field->is_nullable))
 			return -1;
 		mp_next(&tuple);
 	}

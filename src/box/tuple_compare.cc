@@ -471,8 +471,8 @@ tuple_compare_slowpath(const struct tuple *tuple_a, const struct tuple *tuple_b,
 					  part->fieldno);
 		field_b = tuple_field_raw(format_b, tuple_b_raw, field_map_b,
 					  part->fieldno);
-		assert(field_a != NULL && field_b != NULL);
 		if (! is_nullable) {
+			assert(field_a != NULL && field_b != NULL);
 			rc = tuple_compare_field(field_a, field_b, part->type,
 						 part->coll);
 			if (rc != 0)
@@ -480,8 +480,8 @@ tuple_compare_slowpath(const struct tuple *tuple_a, const struct tuple *tuple_b,
 			else
 				continue;
 		}
-		enum mp_type a_type = mp_typeof(*field_a);
-		enum mp_type b_type = mp_typeof(*field_b);
+		enum mp_type a_type = field_a ? mp_typeof(*field_a) : MP_NIL;
+		enum mp_type b_type = field_b ? mp_typeof(*field_b) : MP_NIL;
 		if (a_type == MP_NIL) {
 			if (b_type != MP_NIL)
 				return -1;
