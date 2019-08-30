@@ -326,6 +326,9 @@ recovery_journal_create(struct recovery_journal *journal, struct vclock *v)
 static void
 apply_wal_row(struct xstream *stream, struct xrow_header *row)
 {
+	if (row == NULL)
+		return;
+
 	struct request request;
 	xrow_decode_dml_xc(row, &request, dml_request_key_map(row->type));
 	if (request.type != IPROTO_NOP) {
